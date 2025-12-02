@@ -284,3 +284,35 @@ def ask_question(query: str, profile: Optional[Dict[str, Any]] = None) -> Option
     response["pages"] = pages
     return response
 
+import json
+
+def print_response(response):
+    """
+    LangChain RAG 응답을 사람이 읽기 좋은 형태로 출력
+    """
+
+    print("\n==================== RAG 결과 요약 ====================\n")
+
+    # 1) answer 정리
+    answer = response.get("answer")
+    if answer:
+        print("[AI 최종 답변]\n")
+        print(answer)
+        print("\n")
+
+    # 2) context 요약
+    context = response.get("context", [])
+    print("[참조된 약관 문맥]\n")
+    for i, doc in enumerate(context, start=1):
+        page = doc.metadata.get("page", "?")
+        source = doc.metadata.get("source", "unknown")
+
+        print(f"--- 문서 #{i} (page={page}, source={source}) ---")
+        print(doc.page_content[:300] + "...")
+        print()
+
+    # 3) pages
+    pages = response.get("pages", [])
+    print("[참조된 페이지 목록]:", pages)
+
+    print("\n=======================================================\n")
