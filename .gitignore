@@ -1,0 +1,14 @@
+# 가상환경
+venv/
+.venv/
+__pycache__/
+
+# 설정 및 환경 변수
+.env
+
+# 데이터 파일
+*.pdf
+/content/  # 혹시 코랩 폴더가 있다면
+
+# VS Code 설정
+.vscode/
