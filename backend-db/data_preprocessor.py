@@ -1,5 +1,4 @@
 import json
-
 def test_user_data(user_data):
     """
     JSON 형태의 데이터를 받아 구조를 분석하고 모든 값을 출력.
