@@ -349,7 +349,7 @@ class InsuranceRecommender:
                 }]
 
                 items.append({
-                    "itemId": f"rag-{uuid.uuid4().hex[:8]}",
+                    "itemId": uuid.uuid4().hex[:8],
                     "insurance_company": company,
                     "product_name": product,
                     "is_long_term": True,
@@ -361,7 +361,7 @@ class InsuranceRecommender:
                 })
 
             return {
-                "resultId": f"rag-{uuid.uuid4().hex[:8]}",
+                "resultId": uuid.uuid4().hex[:8],
                 "expiresInSec": 600,
                 "items": items,
                 "rag_metadata": {
