@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 import json
 import logging
 import httpx
+from insurance_recommender import recommender
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("bw-ai")
@@ -47,7 +48,7 @@ class JobIn(BaseModel):
     jobName: Optional[str] = None
     riskLevel: Optional[int] = None
 
-
+# 임신 관련 정보
 class PregnancyInfo(BaseModel):
     weightPre: Optional[int] = None
     weightCurrent: Optional[int] = None
@@ -61,7 +62,7 @@ class PregnancyInfo(BaseModel):
     def parse_expected_date(cls, v):
         return any_to_date(v)
 
-
+# 사용자 기본 정보
 class UserProfile(BaseModel):
     userId: Union[int, str]
     birthDate: Optional[Union[int, str, date, List[int]]] = None
@@ -125,6 +126,7 @@ class UserProfile(BaseModel):
         return None
 
 
+
 class PastDisease(BaseModel):
     statusId: Optional[int] = None
     pastDiseaseType: str
@@ -174,7 +176,8 @@ class ItemOut(BaseModel):
     insurance_company: str
     product_name: str
     is_long_term: bool
-    monthly_cost: int
+    sum_insured: int
+    monthly_cost: str
 
     insurance_recommendation_reason: Optional[str] = None
     special_contracts: Optional[List[SpecialContractOut]] = None
@@ -186,58 +189,61 @@ class RecommendListResponseOut(BaseModel):
     expiresInSec: int = 600
     items: List[ItemOut]
 
-
+# 서버 상태 확인
 @app.get("/")
 async def root():
     return {"message": "BWLOVERS AI 서버 실행 중", "version": "1.0.0", "status": "healthy"}
+
 
 
 @app.get("/health")
 async def health_check():
     return {"status": "healthy", "timestamp": datetime.now().isoformat()}
 
-
-@app.post("/ai/recommend", response_model=RecommendListResponseOut)
+# 보험 추천 API (백엔드 데이터 수신 → AI 처리 → 백엔드 콜백)
+@app.post("/ai/recommend")
 async def recommend(request: BackendRequest):
-    """
-    백엔드에서 산모 정보 + 건강 상태를 받아 보험 추천 수행
-    - 응답은 resultId/expiresInSec/items 형태로만 반환함 (백엔드 DTO 맞춤)
-    """
+    """RAG 기반 보험 추천 API"""
     try:
-        log.info("[AI] 요청 수신 RAW(JSON)\n%s", json.dumps(request.model_dump(mode="json"), ensure_ascii=False, indent=2))
-
-        up = request.user_profile
-        hs = request.health_status
-        pi = up.pregnancyInfo
-
-        # 추천 생성
-        recommendations = generate_recommendations_db(request)
-
-        items: List[Dict[str, Any]] = []
-        for idx, rec in enumerate(recommendations, start=1):
-            rec = dict(rec)
-            rec["itemId"] = rec.get("itemId") or f"item-{idx}"
-            items.append(rec)
-
-        result_id = str(uuid.uuid4())
-        ttl = 600
-
-        # 콜백은 그대로 보내되, 응답에는 절대 섞지 않음
-        backend_response = await send_to_backend(result_id, items)
-        log.info("[AI] backend callback result=%s", backend_response)
-
-        # 백엔드가 원하는 최종 응답
-        return {
-            "resultId": result_id,
-            "expiresInSec": ttl,
-            "items": items
-        }
-
-    except HTTPException:
-        raise
+        log.info(f"[요청] user_id={request.user_profile.userId}")
+        
+        # 직접 recommender.generate_rag_recommendation 호출
+        user_profile = request.user_profile.model_dump()
+        health_status = request.health_status.model_dump()
+        recommendation_result = recommender.generate_rag_recommendation(user_profile, health_status)
+        
+        # RAGAS 성능 확인
+        if "rag_metadata" in recommendation_result:
+            metadata = recommendation_result["rag_metadata"]
+            log.info(f"[RAGAS] ragas 점수={metadata.get('llm_response_quality', 0):.2f}, "
+                    f"참고 문서수={metadata.get('documents_used', 0)}, "
+                    f"사용자 임신주수={metadata.get('gestational_week', 0)}")
+        
+        return RecommendListResponseOut(**{
+            "resultId": recommendation_result.get("resultId", f"rec-{uuid.uuid4().hex[:8]}"),
+            "expiresInSec": 600,
+            "items": recommendation_result.get("items", [])
+        })
+        
     except Exception as e:
-        log.exception("[AI] 추천 처리 중 오류: %s", str(e))
-        raise HTTPException(status_code=500, detail="AI 처리 중 내부 오류가 발생함")
+        log.error(f"[오류] 추천 생성 실패: {e}")
+        # 폴백 추천 (RAG 기반 추천 실패 시 기본 추천으로 응답함)
+        fallback_items = [
+            ItemOut(
+                itemId=f"fallback-{uuid.uuid4().hex[:8]}",
+                insurance_company="교보라이프플래닛",
+                product_name="무배당 교보라플 어린이보험",
+                is_long_term=True,
+                sum_insured=10000000,
+                monthly_cost="1000원",
+                insurance_recommendation_reason="시스템 오류로 기본 추천 제공"
+            )
+        ]
+        return RecommendListResponseOut(
+            resultId=f"error-{uuid.uuid4().hex[:8]}",
+            expiresInSec=600,
+            items=fallback_items
+        )
 
 
 async def send_to_backend(result_id: str, items: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -274,6 +280,8 @@ async def send_to_backend(result_id: str, items: List[Dict[str, Any]]) -> Dict[s
         return {"status_code": None, "success": False, "error": str(e)}
 
 
+
+# 하드코딩된 예시 추천 데이터 변환
 def generate_recommendations_db(request: BackendRequest) -> List[Dict[str, Any]]:
     """
     테스트용 예시 추천 데이터 반환
