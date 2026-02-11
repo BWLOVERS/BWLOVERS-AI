@@ -32,135 +32,64 @@ def yyyymmdd_to_date(v: int) -> date:
 
 
 def any_to_date(v):
-    if v is None:
-        return None
-    if isinstance(v, date):
+    if v is None or isinstance(v, date):
         return v
     if isinstance(v, int):
-        return yyyymmdd_to_date(v)
+        s = str(v)
+        return date(int(s[0:4]), int(s[4:6]), int(s[6:8]))
     if isinstance(v, list) and len(v) == 3:
         return date(int(v[0]), int(v[1]), int(v[2]))
+    if isinstance(v, str):
+        try:
+            return date.fromisoformat(v)
+        except:
+            return None
     return v
 
+# --- 요청 스키마 (Java DTO와 일치화) ---
 
-class JobIn(BaseModel):
-    jobId: Optional[int] = None
-    jobName: Optional[str] = None
-    riskLevel: Optional[int] = None
-
-# 임신 관련 정보
-class PregnancyInfo(BaseModel):
-    weightPre: Optional[int] = None
-    weightCurrent: Optional[int] = None
-    gestationalWeek: Optional[int] = None
-    isFirstbirth: Optional[bool] = None
-    isMultiplePregnancy: Optional[bool] = None
-    miscarriageHistory: Optional[int] = 0
-    expectedDate: Optional[Union[int, str, date, List[int]]] = None
-
-    @field_validator("expectedDate", mode="before")
-    def parse_expected_date(cls, v):
-        return any_to_date(v)
-
-# 사용자 기본 정보
 class UserProfile(BaseModel):
-    userId: Union[int, str]
-    birthDate: Optional[Union[int, str, date, List[int]]] = None
+    """Java의 PregnancyInfoRequest와 1:1 매칭"""
+    userId: Optional[Union[int, str]] = None
+    birthDate: Optional[Any] = None
     height: Optional[int] = None
-
-    job: Optional[Union[str, JobIn]] = None
-    jobName: Optional[str] = None
-
     weightPre: Optional[int] = None
     weightCurrent: Optional[int] = None
-    gestationalWeek: Optional[int] = None
     isFirstbirth: Optional[bool] = None
-    isMultiplePregnancy: Optional[bool] = None
-    miscarriageHistory: Optional[int] = None
-    expectedDate: Optional[Union[int, str, date, List[int]]] = None
+    gestationalWeek: Optional[int] = None # Java: Integer gestationalWeek
+    expectedDate: Optional[Any] = None
+    isMultiplePregnancy: Optional[bool] = None # Java: Boolean isMultiplePregnancy
+    miscarriageHistory: Optional[int] = 0
+    jobName: Optional[str] = None
 
-    pregnancyInfo: Optional[PregnancyInfo] = None
-
-    @field_validator("birthDate", mode="before")
-    def parse_birth_date(cls, v):
+    @field_validator("birthDate", "expectedDate", mode="before")
+    def parse_dates(cls, v):
         return any_to_date(v)
-
-    @field_validator("job", mode="before")
-    def normalize_job(cls, v):
-        if isinstance(v, str):
-            return JobIn(jobName=v)
-        return v
-
-    @model_validator(mode="after")
-    def build_nested_pregnancy_info(self):
-        if self.pregnancyInfo is not None:
-            return self
-
-        if any([
-            self.weightPre is not None,
-            self.weightCurrent is not None,
-            self.gestationalWeek is not None,
-            self.isFirstbirth is not None,
-            self.isMultiplePregnancy is not None,
-            self.miscarriageHistory is not None,
-            self.expectedDate is not None,
-        ]):
-            self.pregnancyInfo = PregnancyInfo(
-                weightPre=self.weightPre,
-                weightCurrent=self.weightCurrent,
-                gestationalWeek=self.gestationalWeek,
-                isFirstbirth=self.isFirstbirth,
-                isMultiplePregnancy=self.isMultiplePregnancy,
-                miscarriageHistory=self.miscarriageHistory if self.miscarriageHistory is not None else 0,
-                expectedDate=any_to_date(self.expectedDate),
-            )
-        return self
-
-    def resolved_job_name(self) -> Optional[str]:
-        if self.jobName:
-            return self.jobName
-        if isinstance(self.job, JobIn):
-            return self.job.jobName
-        if isinstance(self.job, str):
-            return self.job
-        return None
-
-
 
 class PastDisease(BaseModel):
-    statusId: Optional[int] = None
     pastDiseaseType: str
     pastCured: bool
     pastLastTreatedAt: Optional[str] = None
 
-
 class ChronicDisease(BaseModel):
-    statusId: Optional[int] = None
     chronicDiseaseType: str
     chronicOnMedication: bool
 
-
 class HealthStatus(BaseModel):
-    userId: Union[int, str]
-    createdAt: Optional[Union[str, datetime]] = None
+    userId: Optional[Union[int, str]] = None
     pastDiseases: List[PastDisease] = Field(default_factory=list)
     chronicDiseases: List[ChronicDisease] = Field(default_factory=list)
     pregnancyComplications: List[str] = Field(default_factory=list)
 
-
 class BackendRequest(BaseModel):
+    """Java: private PregnancyInfoRequest user_profile;"""
     user_profile: UserProfile
     health_status: HealthStatus
 
-
-# =========================
-# 응답 형태 스키마
-# =========================
-
+# --- 응답 스키마 ---
 class EvidenceSourceOut(BaseModel):
     page_number: int
     text_snippet: str
-
 
 class SpecialContractOut(BaseModel):
     contract_name: str
@@ -169,20 +98,16 @@ class SpecialContractOut(BaseModel):
     key_features: List[str]
     page_number: int
 
-
 class ItemOut(BaseModel):
     itemId: str
-
     insurance_company: str
     product_name: str
     is_long_term: bool
     sum_insured: int
     monthly_cost: str
-
     insurance_recommendation_reason: Optional[str] = None
     special_contracts: Optional[List[SpecialContractOut]] = None
     evidence_sources: Optional[List[EvidenceSourceOut]] = None
-
 
 class RecommendListResponseOut(BaseModel):
     resultId: str
