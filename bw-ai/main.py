@@ -186,7 +186,7 @@ async def recommend(request: BackendRequest):
         )
 
 # --- 보험 시뮬레이션 API 엔드포인트 ---
-@app.post("/analysis/simulation")
+@app.post("/ai/simulation")
 async def simulation(
     request: SimulationRequestIn,
     authorization: Optional[str] = Header(None, alias="Authorization")
