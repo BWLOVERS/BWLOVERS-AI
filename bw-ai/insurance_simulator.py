@@ -4,6 +4,27 @@ import uuid
 import re
 from typing import Dict, Any, List, Optional
 
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+def _first_existing_dir(candidates: List[Optional[str]]) -> Optional[str]:
+    for c in candidates:
+        if c and os.path.exists(c):
+            return os.path.abspath(c)
+    return None
+
+def _resolve_faiss_dir() -> str:
+    env_dir = os.getenv("FAISS_DB_DIR")
+    candidates = [
+        env_dir,
+        os.path.join(CURRENT_DIR, "faiss_index"),
+        os.path.join(CURRENT_DIR, "..", "faiss_index"),
+        "/app/faiss_index",
+        "/faiss_index",
+    ]
+    return _first_existing_dir(candidates) or os.path.abspath(os.path.join(CURRENT_DIR, "faiss_index"))
+
+FAISS_DIR = _resolve_faiss_dir()
+
 # FAISS 기반 RAG + LLM 관련 임포트
 try:
     from langchain_community.vectorstores import FAISS
@@ -13,21 +34,19 @@ try:
     
     # insurance_recommender에서 이미 로드된 vectorstore 재사용 가능
     # 또는 독립적으로 로드
-    CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-    faiss_path = os.path.join(CURRENT_DIR, "..", "faiss_index")
     
     embeddings = HuggingFaceEmbeddings(
         model_name="jhgan/ko-sroberta-multitask",
         model_kwargs={"device": "cpu"},
         encode_kwargs={"normalize_embeddings": True},
     )
-    
-    if os.path.exists(os.path.join(faiss_path, "index.faiss")):
-        vectorstore = FAISS.load_local(faiss_path, embeddings, allow_dangerous_deserialization=True)
-        print(f"✅ 보험 시뮬레이션: FAISS 벡터스토어 로드됨: {vectorstore.index.ntotal}개 문서")
+    index_file = os.path.join(FAISS_DIR, "index.faiss")
+    if os.path.exists(index_file):
+        vectorstore = FAISS.load_local(FAISS_DIR, embeddings, allow_dangerous_deserialization=True)
+        print(f"✅ 보험 시뮬레이션: FAISS 벡터스토어 로드됨: {vectorstore.index.ntotal}개 문서 (dir={FAISS_DIR})")
     else:
         vectorstore = None
-        print("보험 시뮬레이션: FAISS 벡터스토어 없음")
+        print(f"보험 시뮬레이션: FAISS 벡터스토어 없음 (dir={FAISS_DIR})")
     
     RAG_AVAILABLE = True
 except Exception as e:

@@ -18,11 +18,28 @@ if not OPENAI_API_KEY:
     raise RuntimeError("환경변수 OPENAI_API_KEY가 설정되어 있지 않습니다.")
 os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
 
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+def _resolve_db_dir() -> str:
+    env_dir = os.getenv("FAISS_DB_DIR")
+    candidates = [
+        env_dir,
+        os.path.join(CURRENT_DIR, "faiss_index"),
+        os.path.join(CURRENT_DIR, "..", "faiss_index"),
+        "/app/faiss_index",
+        "/faiss_index",
+    ]
+    for c in candidates:
+        if c and os.path.exists(c):
+            return os.path.abspath(c)
+    return os.path.abspath(os.path.join(CURRENT_DIR, "faiss_index"))
+
 # =========================
 # 2. FAISS Vectorstore 로드
 # =========================
 
-DB_DIR = os.getenv("FAISS_DB_DIR", "../faiss_index")
+DB_DIR = _resolve_db_dir()
+print(f"RAG DB 경로: {DB_DIR}")
 
 if not os.path.exists(DB_DIR):
     print(f"FAISS DB 폴더({DB_DIR})가 없습니다. 새로운 DB를 생성합니다.")

@@ -2,8 +2,46 @@ import json
 import os
 import uuid
 import re
+# 보험명 수정
+import unicodedata
 from typing import Dict, Any, List, Optional
 from datetime import datetime
+
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+def _first_existing_dir(candidates: List[Optional[str]]) -> Optional[str]:
+    for c in candidates:
+        if c and os.path.exists(c):
+            return os.path.abspath(c)
+    return None
+
+
+def _resolve_faiss_dir() -> str:
+    env_dir = os.getenv("FAISS_DB_DIR")
+    candidates = [
+        env_dir,
+        os.path.join(CURRENT_DIR, "faiss_index"),
+        os.path.join(CURRENT_DIR, "..", "faiss_index"),
+        "/app/faiss_index",
+        "/faiss_index",
+    ]
+    return _first_existing_dir(candidates) or os.path.abspath(os.path.join(CURRENT_DIR, "faiss_index"))
+
+
+def _resolve_llama_json_dir() -> str:
+    env_dir = os.getenv("INSURANCE_JSON_DIR")
+    candidates = [
+        env_dir,
+        os.path.join(CURRENT_DIR, "json", "Llama_json"),
+        os.path.join(CURRENT_DIR, "..", "json", "Llama_json"),
+        "/app/json/Llama_json",
+        "/json/Llama_json",
+    ]
+    return _first_existing_dir(candidates) or os.path.abspath(os.path.join(CURRENT_DIR, "..", "json", "Llama_json"))
+
+
+FAISS_DIR = _resolve_faiss_dir()
+LLAMA_JSON_DIR = _resolve_llama_json_dir()
 
 # FAISS 기반 RAG + LLM 관련 임포트
 try:
@@ -22,13 +60,13 @@ try:
     )
 
     # FAISS 벡터스토어 절대 경로 설정
-    CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-    faiss_path = os.path.join(CURRENT_DIR, "..", "faiss_index")
-
+    # CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+    # faiss_path = os.path.join(CURRENT_DIR, "..", "faiss_index")
+    index_file = os.path.join(FAISS_DIR, "index.faiss")
     # FAISS 벡터스토어 로드
-    if os.path.exists(os.path.join(faiss_path, "index.faiss")):
-        vectorstore = FAISS.load_local(faiss_path, embeddings, allow_dangerous_deserialization=True)
-        print(f"✅ 기존 FAISS 벡터스토어 로드됨: {vectorstore.index.ntotal}개 문서")
+    if os.path.exists(index_file):
+        vectorstore = FAISS.load_local(FAISS_DIR, embeddings, allow_dangerous_deserialization=True)
+        print(f"✅ 기존 FAISS 벡터스토어 로드됨: {vectorstore.index.ntotal}개 문서 (dir={FAISS_DIR})")
     else:
         vectorstore = None
         print("🆕 FAISS 벡터스토어 생성 예정")
@@ -42,7 +80,6 @@ except Exception as e:
     embeddings = None
     RAG_AVAILABLE = False
     LLM_AVAILABLE = False
-    CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # 보험료 및 가입금액 테이블 로드
 PRICE_MAP = {}
@@ -70,25 +107,52 @@ _load_data_maps()
 
 
 # ---- 보험사명 추출(오답 방지용) ----
-INSURER_NAMES = [
-    "삼성화재",
-    "현대해상",
-    "DB손해보험",
-    "KB손해보험",
-    "메리츠화재",
-    "한화손해보험",
-    "흥국화재",
-    "롯데손해보험",
-    "MG손해보험",
-]
+INSURER_ALIASES = {
+    "삼성화재": ["삼성화재"],
+    "현대해상": ["현대해상"],
+    "DB손해보험": ["DB손해보험", "동부화재", "프로미라이프"],
+    "KB손해보험": ["KB손해보험", "KB손보", "KB"],
+    "교보라이프플래닛생명": ["교보라이프플래닛생명", "교보라이프플래닛", "교보라플", "라이프플래닛"],
+    "교보생명": ["교보생명"],
+    "메리츠화재": ["메리츠화재"],
+    "한화손해보험": ["한화손해보험"],
+    "흥국화재": ["흥국화재"],
+    "롯데손해보험": ["롯데손해보험"],
+    "MG손해보험": ["MG손해보험"],
+    "신한라이프생명": ["신한라이프생명", "신한라이프"],
+    "삼성생명": ["삼성생명"],
+    "동양생명": ["동양생명"],
+    "메트라이프생명": ["메트라이프생명", "메트라이프"],
+    "ABL생명": ["ABL생명"],
+    "DB생명": ["DB생명"],
+}
 
+
+def _norm_text(s: Optional[str]) -> str:
+    if not s:
+        return ""
+    s = unicodedata.normalize("NFC", s)
+    s = s.replace("·", "ㆍ")
+    s = re.sub(r"\s+", "", s)
+    return s
 
 def extract_insurer_name(text: Optional[str]) -> str:
-    if not text:
+    t = _norm_text(text)
+    if not t:
         return ""
-    for name in INSURER_NAMES:
-        if name in text:
-            return name
+
+    for canonical, aliases in INSURER_ALIASES.items():
+        for alias in aliases:
+            if _norm_text(alias) in t:
+                return canonical
+
+    for insurer in PRICE_MAP.keys():
+        if _norm_text(insurer) in t:
+            return insurer
+    for insurer in SUM_INSURED_MAP.keys():
+        if _norm_text(insurer) in t:
+            return insurer
+
     return ""
 
 
@@ -121,7 +185,7 @@ class InsuranceRecommender:
                 return
 
             documents = []
-            data_dir = os.path.join(CURRENT_DIR, "..", "json", "Llama_json")
+            data_dir = LLAMA_JSON_DIR
 
             if not os.path.exists(data_dir):
                 print(f"❌ 데이터 디렉토리 없음: {data_dir}")
@@ -146,9 +210,9 @@ class InsuranceRecommender:
 
             if documents:
                 self.vectorstore = FAISS.from_documents(documents, self.embeddings)
-                os.makedirs(faiss_path, exist_ok=True)
-                self.vectorstore.save_local(faiss_path)
-                print(f"✅ FAISS 생성 완료: {len(documents)}개 문서")
+                os.makedirs(FAISS_DIR, exist_ok=True)
+                self.vectorstore.save_local(FAISS_DIR)
+                print(f"✅ FAISS 생성 완료: {len(documents)}개 문서 (dir={FAISS_DIR})")
         except Exception as e:
             print(f"❌ 데이터 로드 치명적 오류: {e}")
 
@@ -220,8 +284,7 @@ class InsuranceRecommender:
         available_products = []
         for insurer, products in PRICE_MAP.items():
             for product_name, price in products.items():
-                if price != "재확인 필요":
-                    available_products.append(f"  - {insurer}: {product_name}")
+                available_products.append(f"  - {insurer}: {product_name}")
         
         products_list = "\n".join(available_products)
         
@@ -298,8 +361,9 @@ class InsuranceRecommender:
                 doc_product_name = md.get("product_name", "").strip()
                 if doc_product_name and doc_product_name != "?":
                     # 문서에서 보험사명 추출
-                    doc_insurer = extract_insurer_name(doc_product_name)
-                    
+                    # 보험명 수정
+                    doc_source_file = unicodedata.normalize("NFC", md.get("source_file", "").strip())
+                    doc_insurer = extract_insurer_name(f"{doc_product_name} {doc_source_file}")
                     # 추천된 보험사와 문서의 보험사가 일치하는지 확인
                     if doc_insurer and (comp in doc_insurer or doc_insurer in comp or comp in doc_insurer):
                         # 일치하면 문서의 product_name과 보험사명 사용
