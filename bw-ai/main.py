@@ -1,8 +1,7 @@
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Header
 from pydantic import BaseModel, Field, field_validator
 from typing import Dict, Any, Optional, List, Union
 import os
-import uvicorn
 import uuid
 from datetime import datetime, date
 from fastapi.exceptions import RequestValidationError
@@ -10,7 +9,8 @@ from fastapi.responses import JSONResponse
 import logging
 import httpx
 from insurance_recommender import recommender
-from insurance_simulator import simulator
+from insurance_simulator import InsuranceSimulator
+simulator = InsuranceSimulator()
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("bw-ai")
@@ -123,17 +123,17 @@ class SimulationRequestIn(BaseModel):
     question: str
 
 # --- 시뮬레이션 응답 스키마 ---
-class SimulationEvidenceOut(BaseModel):
+class SpecialContractOut(BaseModel):
+    contract_name: str
     page_number: int
-    text_snippet: str
 
 class SimulationResponseOut(BaseModel):
-    resultId: str
-    is_covered: bool
-    analysis: str
-    coverage_details: Optional[str] = None
-    limitations: Optional[List[str]] = None
-    evidence_sources: List[SimulationEvidenceOut] = Field(default_factory=list)
+    simulationId: str
+    insurance_company: str
+    product_name: str
+    special_contracts: List[SpecialContractOut]
+    question: str
+    result: str 
 
 # --- 보험 추천 API 엔드포인트 ---
 
@@ -185,7 +185,7 @@ async def recommend(request: BackendRequest):
             items=[]
         )
 
-# --- 시뮬레이션 API 엔드포인트 ---
+# --- 보험 시뮬레이션 API 엔드포인트 ---
 @app.post("/analysis/simulation")
 async def simulation(
     request: SimulationRequestIn,
@@ -195,17 +195,21 @@ async def simulation(
     특정 상황(질병 등) 발생 시 보장 가능 여부를 분석합니다.
     """
     try:
-        # accessToken 검증
-        access_token = None
-        if authorization:
-            parts = authorization.split()
-            if len(parts) == 2 and parts[0].lower() == "bearer":
-                access_token = parts[1]
-            else:
-                access_token = authorization
+        # accessToken 검증 (테스트용으로 비활성화 가능)
+        # 환경변수로 제어: REQUIRE_AUTH=false로 설정하면 검증 스킵
+        require_auth = os.getenv("REQUIRE_AUTH", "false").lower() == "true"
         
-        if not access_token:
-            raise HTTPException(status_code=401, detail="accessToken이 필요합니다.")
+        if require_auth:
+            access_token = None
+            if authorization:
+                parts = authorization.split()
+                if len(parts) == 2 and parts[0].lower() == "bearer":
+                    access_token = parts[1]
+                else:
+                    access_token = authorization
+            
+            if not access_token:
+                raise HTTPException(status_code=401, detail="accessToken이 필요합니다.")
         
         log.info(f"[시뮬레이션 요청] 보험사={request.insurance_company}, 상품={request.product_name}")
         
@@ -217,7 +221,20 @@ async def simulation(
             question=request.question
         )
         
-        return SimulationResponseOut(**simulation_result)
+        # 응답 형식 변환
+        return SimulationResponseOut(
+            simulationId=simulation_result.get("simulationId", uuid.uuid4().hex[:8]),
+            insurance_company=request.insurance_company,
+            product_name=request.product_name,
+            special_contracts=[
+                SpecialContractOut(
+                    contract_name=sc.contract_name,
+                    page_number=sc.page_number
+                ) for sc in request.special_contracts
+            ],
+            question=request.question,
+            result=simulation_result.get("result", "")
+        )
         
     except HTTPException:
         raise
@@ -226,5 +243,6 @@ async def simulation(
         raise HTTPException(status_code=500, detail=f"시뮬레이션 분석 중 오류가 발생했습니다: {str(e)}")
 
 if __name__ == "__main__":
+    import uvicorn
     port = int(os.environ.get("PORT", 8080))
-    uvicorn.run("main:app", host="0.0.0.0", port=port)
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
