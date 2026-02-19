@@ -215,20 +215,39 @@ class InsuranceRecommender:
             )
         return "\n\n".join(parts)
 
-    # ✅ 프롬프트(출력 스키마) 스펙대로 수정함
     def _build_llm_question(self, analysis: Dict[str, Any], context: str) -> str:
+        # prices.json에서 사용 가능한 보험 목록 생성
+        available_products = []
+        for insurer, products in PRICE_MAP.items():
+            for product_name, price in products.items():
+                if price != "재확인 필요":
+                    available_products.append(f"  - {insurer}: {product_name}")
+        
+        products_list = "\n".join(available_products)
+        
         return f"""
 역할: 보험 전문 언더라이터
 임신부 정보: {analysis['gestational_week']}주차, 위험요인({analysis.get('risk_factors', [])}), 다태아({analysis['is_multiple_pregnancy']})
 
 지침:
 1. 제공된 [보험 약관 정보]만 근거로 가장 적합한 보험 상품 2-3개를 추천하라.
-2. 반드시 JSON 형식으로만 답변하라. (설명 문장/코드블록/주석 금지)
-3. evidence는 문맥에서 그대로 인용한 문장과 페이지를 포함하라.
-4. 매우 중요:
-   - insurance_company에는 "삼성화재"처럼 '보험사명'만 작성
-   - product_name에는 "무배당 ... 보험(...)"처럼 '보험상품명'만 작성
+2. **중요: 다양한 보험사를 추천하라. 같은 보험사만 추천하지 말 것.**
+3. 반드시 JSON 형식으로만 답변하라. (설명 문장/코드블록/주석 금지)
+4. evidence는 문맥에서 그대로 인용한 문장과 페이지를 포함하라.
+5. **매우 중요 - product_name은 반드시 아래 [사용 가능한 보험 목록]에 있는 정확한 이름을 사용하라:**
+   - insurance_company에는 "삼성화재", "교보라이프플래닛생명", "현대해상" 등 '보험사명'만 작성
+   - product_name은 반드시 아래 목록에 있는 정확한 이름을 그대로 사용하라 (문자 하나도 바꾸지 말 것)
+   - 목록에 없는 보험 이름을 만들어내지 말 것
    - 특약명은 special_contracts 배열에만 작성 (product_name에 특약명 쓰지 말 것)
+6. monthly_cost와 sum_insured는 약관 정보나 일반적인 보험료 범위를 참고하여 추정하라.
+7. special_contracts는 각 특약에 대한 상세 정보를 포함해야 함:
+   - contract_name: 특약명
+   - contract_description: 약관에서 추출한 특약 설명 (1-2문장)
+   - contract_recommendation_reason: 이 특약을 추천하는 이유 (사용자의 임신 주수와 위험요인 고려)
+   - key_features: 특약의 주요 특징 (배열, 2-3개)
+
+[사용 가능한 보험 목록] (반드시 이 목록에서만 선택)
+{products_list}
 
 [보험 약관 정보]
 {context}
@@ -237,11 +256,20 @@ class InsuranceRecommender:
 {{
   "recommendations": [
     {{
-      "insurance_company": "보험사명",
-      "product_name": "보험상품명",
+      "insurance_company": "보험사명 (위 목록에서)",
+      "product_name": "보험상품명 (위 목록에서 정확히 선택)",
       "monthly_cost": 30000,
+      "sum_insured": 10000000,
       "reason": "주수와 위험요인을 고려한 구체적 추천 이유",
-      "special_contracts": ["특약명1", "특약명2"],
+      "special_contracts": [
+        {{
+          "contract_name": "특약명1",
+          "contract_description": "약관에서 추출한 특약 설명",
+          "contract_recommendation_reason": "이 특약을 추천하는 구체적 이유",
+          "key_features": ["특징1", "특징2", "특징3"],
+          "page_number": 12
+        }}
+      ],
       "evidence": "인용문... (page=숫자)"
     }}
   ]
@@ -266,40 +294,116 @@ class InsuranceRecommender:
                 comp = (rec.get("insurance_company") or "").strip()
                 prod = (rec.get("product_name") or "").strip()
 
+                # ✅ FAISS 문서의 메타데이터에서 product_name이 있으면 확인
+                doc_product_name = md.get("product_name", "").strip()
+                if doc_product_name and doc_product_name != "?":
+                    # 문서에서 보험사명 추출
+                    doc_insurer = extract_insurer_name(doc_product_name)
+                    
+                    # 추천된 보험사와 문서의 보험사가 일치하는지 확인
+                    if doc_insurer and (comp in doc_insurer or doc_insurer in comp or comp in doc_insurer):
+                        # 일치하면 문서의 product_name과 보험사명 사용
+                        prod = doc_product_name
+                        comp = doc_insurer
+                        print(f"📄 FAISS 문서 사용: {comp} / {prod}")
+                    else:
+                        # 불일치하면 LLM 추천값 사용
+                        print(f"⚠️ 보험사 불일치 - LLM: {comp}, 문서: {doc_insurer}")
+                        print(f"   → LLM 추천값 유지: {comp} / {prod}")
+
+                # ✅ 보험사명 정규화 (prices.json과 매칭 개선)
+                comp = self._find_matching_insurer(comp)
+
                 # ✅ 방어: LLM이 또 뒤집어 쓰는 경우 교정
-                # - comp가 플랜명처럼 보이고 prod가 특약처럼 보이면
-                #   -> prod는 comp(플랜명)로, comp는 플랜명에서 보험사명만 추출
                 if looks_like_plan_name(comp) and looks_like_contract_name(prod):
                     plan_name = comp
-                    comp = extract_insurer_name(plan_name) or comp  # 최악의 경우 원본 유지
+                    comp = extract_insurer_name(plan_name) or comp
                     prod = plan_name
 
-                # 가입금액 및 보험료 테이블 매칭(보험사+상품명 기준)
-                sum_insured = self._get_sum_insured(comp, prod)
-                monthly_cost = self._get_insurance_price(comp, prod)
+                # ✅ 테이블에서 먼저 조회, 없으면 LLM 값 사용
+                # 1. 테이블에서 보험료 조회
+                monthly_cost, found_in_table = self._get_insurance_price(comp, prod)
+                
+                # ... 나머지 코드 동일 ...
+                
+                # 2. 테이블에 값이 없으면 LLM 값 사용
+                if not found_in_table:
+                    llm_monthly_cost = rec.get("monthly_cost")
+                    if llm_monthly_cost is not None:
+                        if isinstance(llm_monthly_cost, str):
+                            num_str = re.sub(r'[^\d]', '', llm_monthly_cost)
+                            if num_str:
+                                monthly_cost = int(num_str)
+                                print(f"📋 LLM 제공 보험료 사용 (테이블 없음): {monthly_cost}원 ({comp} / {prod})")
+                        else:
+                            monthly_cost = int(llm_monthly_cost)
+                            print(f"📋 LLM 제공 보험료 사용 (테이블 없음): {monthly_cost}원 ({comp} / {prod})")
+                    else:
+                        print(f"⚠️ 보험료 조회 실패 (테이블/LLM 모두 없음): {comp} / {prod}")
+                else:
+                    print(f"✅ 테이블에서 보험료 조회: {monthly_cost}원 ({comp} / {prod})")
 
-                special_contracts = rec.get("special_contracts", []) or []
-                # 혹시 LLM이 special_contracts를 문자열로 줄 수도 있어서 방어
-                if isinstance(special_contracts, str):
-                    special_contracts = [special_contracts]
+                # ✅ 테이블에서 먼저 조회, 없으면 LLM 값 사용
+                # 1. 테이블에서 가입금액 조회
+                sum_insured, found_in_table = self._get_sum_insured(comp, prod)
+                
+                # 2. 테이블에 값이 없으면 LLM 값 사용
+                if not found_in_table:
+                    llm_sum_insured = rec.get("sum_insured")
+                    if llm_sum_insured is not None:
+                        if isinstance(llm_sum_insured, str):
+                            if "만원" in llm_sum_insured:
+                                num_str = re.sub(r'[^\d.]', '', llm_sum_insured)
+                                if num_str:
+                                    sum_insured = int(float(num_str) * 10000)
+                                    print(f"📋 LLM 제공 가입금액 사용 (테이블 없음): {sum_insured}원 ({comp} / {prod})")
+                            else:
+                                num_str = re.sub(r'[^\d]', '', llm_sum_insured)
+                                if num_str:
+                                    sum_insured = int(num_str)
+                                    print(f"📋 LLM 제공 가입금액 사용 (테이블 없음): {sum_insured}원 ({comp} / {prod})")
+                        else:
+                            sum_insured = int(llm_sum_insured)
+                            print(f"📋 LLM 제공 가입금액 사용 (테이블 없음): {sum_insured}원 ({comp} / {prod})")
+                    else:
+                        print(f"⚠️ 가입금액 조회 실패 (테이블/LLM 모두 없음): {comp} / {prod}")
+                else:
+                    print(f"✅ 테이블에서 가입금액 조회: {sum_insured}원 ({comp} / {prod})")
+
+                # ✅ 특약 정보 처리 (LLM이 상세 정보를 제공한 경우)
+                special_contracts_data = rec.get("special_contracts", []) or []
+                
+                # 기존 형식(문자열 배열)과 새 형식(객체 배열) 모두 지원
+                special_contracts_list = []
+                for sc in special_contracts_data:
+                    if isinstance(sc, dict):
+                        # 새 형식: 상세 정보가 포함된 객체
+                        special_contracts_list.append({
+                            "contract_name": sc.get("contract_name", ""),
+                            "contract_description": sc.get("contract_description", "약관 기반 맞춤 보장"),
+                            "contract_recommendation_reason": sc.get("contract_recommendation_reason", f"{analysis['gestational_week']}주차 맞춤 특약"),
+                            "key_features": sc.get("key_features", ["보장 범위 확인 완료"]),
+                            "page_number": int(sc.get("page_number", md.get("page_number", 1)))
+                        })
+                    else:
+                        # 기존 형식: 문자열만 제공된 경우
+                        special_contracts_list.append({
+                            "contract_name": str(sc),
+                            "contract_description": "약관 기반 맞춤 보장",
+                            "contract_recommendation_reason": f"{analysis['gestational_week']}주차 맞춤 특약",
+                            "key_features": ["보장 범위 확인 완료"],
+                            "page_number": int(md.get("page_number", 1))
+                        })
 
                 items.append({
                     "itemId": uuid.uuid4().hex[:8],
                     "insurance_company": comp,
                     "product_name": prod,
                     "is_long_term": True,
-                    "sum_insured": int(sum_insured),
+                    "sum_insured": str(sum_insured),
                     "monthly_cost": str(monthly_cost),
                     "insurance_recommendation_reason": rec.get("reason", ""),
-                    "special_contracts": [
-                        {
-                            "contract_name": str(c),
-                            "contract_description": "약관 기반 맞춤 보장",
-                            "contract_recommendation_reason": f"{analysis['gestational_week']}주차 맞춤 특약",
-                            "key_features": ["보장 범위 확인 완료"],
-                            "page_number": int(md.get("page_number", 1))
-                        } for c in special_contracts
-                    ],
+                    "special_contracts": special_contracts_list,
                     "evidence_sources": [
                         {
                             "page_number": int(md.get("page_number", 1)),
@@ -318,17 +422,136 @@ class InsuranceRecommender:
             }
         except Exception as e:
             print(f"❌ LLM 응답 파싱 실패: {e}")
+            import traceback
+            traceback.print_exc()
             return {"items": []}
 
     def _fix_json_string(self, s: str) -> str:
         s = s.replace("「", "'").replace("」", "'").replace("“", "'").replace("”", "'")
         return s.replace("True", "true").replace("False", "false").replace("None", "null")
 
+    def _normalize_product_name(self, name: str) -> str:
+        """보험 상품명 정규화 (유사 문자 통일)"""
+        if not name:
+            return ""
+        # 유사한 문자들을 통일
+        name = name.replace("·", "ㆍ")  # 중점 통일 (· → ㆍ)
+        name = name.replace(" ", "")  # 공백 제거
+        name = name.replace("(해약환급금 미지급형)", "(해약환급금 미지급형Ⅱ)")  # Ⅱ 추가
+        name = name.replace("(해약환급금 미지급형II)", "(해약환급금 미지급형Ⅱ)")  # II → Ⅱ
+        name = name.replace("(해약환급금 미지급형2)", "(해약환급금 미지급형Ⅱ)")  # 2 → Ⅱ
+        return name.strip()
+
+    def _normalize_insurer_name(self, name: str) -> str:
+        """보험사명 정규화"""
+        if not name:
+            return ""
+        return name.strip()
+    
+    def _find_matching_insurer(self, insurer_name: str) -> str:
+        """prices.json에서 일치하는 보험사명 찾기"""
+        normalized = self._normalize_insurer_name(insurer_name)
+        
+        # 정확한 매칭
+        if normalized in PRICE_MAP:
+            return normalized
+        
+        # 부분 매칭 (예: "교보라이프플래닛" → "교보라이프플래닛생명")
+        for key in PRICE_MAP.keys():
+            if normalized in key or key in normalized:
+                return key
+        
+        return insurer_name  # 매칭 실패 시 원본 반환
+
     def _get_sum_insured(self, c, p):
-        return SUM_INSURED_MAP.get(c, {}).get(p, 10000000)
+        """가입금액 조회 (부분 매칭 지원) - (값, 찾았는지 여부) 튜플 반환"""
+        # 정규화된 상품명
+        normalized_p = self._normalize_product_name(p)
+        
+        # 정확한 매칭 시도
+        if c in SUM_INSURED_MAP:
+            for product_name, value in SUM_INSURED_MAP[c].items():
+                normalized_product = self._normalize_product_name(product_name)
+                # 정규화된 이름이 같거나, 원본이 서로 포함되어 있으면 매칭
+                if normalized_p == normalized_product or p in product_name or product_name in p:
+                    if value != "재확인 필요":
+                        return self._parse_sum_insured_value(value), True
+        
+        # 부분 매칭 시도 (보험사명)
+        for insurer_name, products in SUM_INSURED_MAP.items():
+            if c in insurer_name or insurer_name in c:
+                # 상품명 부분 매칭
+                for product_name, value in products.items():
+                    normalized_product = self._normalize_product_name(product_name)
+                    # 정규화된 이름 비교
+                    if normalized_p == normalized_product or p in product_name or product_name in p:
+                        if value != "재확인 필요":
+                            return self._parse_sum_insured_value(value), True
+        
+        # 매칭 실패 시 기본값
+        print(f"⚠️ 가입금액 매칭 실패: {c} / {p} (정규화: {normalized_p})")
+        return 10000000, False
 
     def _get_insurance_price(self, c, p):
-        return PRICE_MAP.get(c, {}).get(p, 30000)
+        """보험료 조회 (부분 매칭 지원) - (값, 찾았는지 여부) 튜플 반환"""
+        # 정규화된 상품명
+        normalized_p = self._normalize_product_name(p)
+        
+        # 정확한 매칭 시도
+        if c in PRICE_MAP:
+            for product_name, value in PRICE_MAP[c].items():
+                normalized_product = self._normalize_product_name(product_name)
+                # 정규화된 이름이 같거나, 원본이 서로 포함되어 있으면 매칭
+                if normalized_p == normalized_product or p in product_name or product_name in p:
+                    if value != "재확인 필요":
+                        return self._parse_price_value(value), True
+        
+        # 부분 매칭 시도 (보험사명)
+        for insurer_name, products in PRICE_MAP.items():
+            if c in insurer_name or insurer_name in c:
+                # 상품명 부분 매칭
+                for product_name, value in products.items():
+                    normalized_product = self._normalize_product_name(product_name)
+                    # 정규화된 이름 비교
+                    if normalized_p == normalized_product or p in product_name or product_name in p:
+                        if value != "재확인 필요":
+                            return self._parse_price_value(value), True
+        
+        # 매칭 실패 시 기본값
+        print(f"⚠️ 보험료 매칭 실패: {c} / {p} (정규화: {normalized_p})")
+        return 30000, False
+
+    def _parse_sum_insured_value(self, value):
+        """가입금액 문자열을 숫자로 변환"""
+        if isinstance(value, (int, float)):
+            return int(value)
+        if isinstance(value, str):
+            # "1,000만원" 형식 처리
+            if "만원" in value:
+                num_str = re.sub(r'[^\d.]', '', value)
+                if num_str:
+                    return int(float(num_str) * 10000)
+            # "10,000,000" 형식 처리
+            else:
+                num_str = re.sub(r'[^\d]', '', value)
+                if num_str:
+                    return int(num_str)
+        return 10000000
+
+    def _parse_price_value(self, value):
+        """보험료 문자열을 숫자로 변환"""
+        if isinstance(value, (int, float)):
+            return int(value)
+        if isinstance(value, str):
+            # "40,056원" 또는 "38,700원 ~ 58,200원" 형식 처리
+            # 범위가 있으면 최소값 사용
+            if "~" in value:
+                value = value.split("~")[0].strip()
+            # 숫자만 추출
+            num_str = re.sub(r'[^\d]', '', value)
+            if num_str:
+                return int(num_str)
+        return 30000
 
     def _fallback_recommendation(self, up, hs):
         return {"resultId": "fallback", "items": [], "rag_metadata": {"fallback": True}}
