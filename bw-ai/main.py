@@ -128,7 +128,7 @@ class SpecialContractOut(BaseModel):
     page_number: int
 
 class SimulationResponseOut(BaseModel):
-    simulationId: str
+    resultId: str
     insurance_company: str
     product_name: str
     special_contracts: List[SpecialContractOut]
@@ -223,7 +223,7 @@ async def simulation(
         
         # 응답 형식 변환
         return SimulationResponseOut(
-            simulationId=simulation_result.get("simulationId", uuid.uuid4().hex[:8]),
+            resultId=simulation_result.get("resultId", uuid.uuid4().hex[:8]),
             insurance_company=request.insurance_company,
             product_name=request.product_name,
             special_contracts=[
