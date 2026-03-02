@@ -2,7 +2,6 @@ import json
 import os
 import uuid
 import re
-# 보험명 수정
 import unicodedata
 from typing import Dict, Any, List, Optional
 from datetime import datetime
@@ -69,13 +68,13 @@ try:
         print(f"✅ 기존 FAISS 벡터스토어 로드됨: {vectorstore.index.ntotal}개 문서 (dir={FAISS_DIR})")
     else:
         vectorstore = None
-        print("🆕 FAISS 벡터스토어 생성 예정")
+        print("FAISS 벡터스토어 생성 예정")
 
     RAG_AVAILABLE = True
     LLM_AVAILABLE = True
 
 except Exception as e:
-    print(f"❌ RAG 시스템 초기화 실패: {e}")
+    print(f"RAG 시스템 초기화 실패: {e}")
     vectorstore = None
     embeddings = None
     RAG_AVAILABLE = False
@@ -108,7 +107,7 @@ _load_data_maps()
 
 # ---- 보험사명 추출(오답 방지용) ----
 INSURER_ALIASES = {
-    "삼성화재": ["삼성화재"],
+    "삼성생명": ["삼성생명"],
     "현대해상": ["현대해상"],
     "DB손해보험": ["DB손해보험", "동부화재", "프로미라이프"],
     "KB손해보험": ["KB손해보험", "KB손보", "KB"],
@@ -180,7 +179,7 @@ class InsuranceRecommender:
     def _load_insurance_data(self):
         """절대 경로를 사용하여 모든 JSON 데이터를 FAISS에 로드"""
         try:
-            # 이미 로드되었다면 스킵
+            # 이미 로드되었다면 스킵하기
             if self.vectorstore and self.vectorstore.index.ntotal > 0:
                 return
 
@@ -188,7 +187,7 @@ class InsuranceRecommender:
             data_dir = LLAMA_JSON_DIR
 
             if not os.path.exists(data_dir):
-                print(f"❌ 데이터 디렉토리 없음: {data_dir}")
+                print(f"데이터 디렉토리 없음: {data_dir}")
                 return
 
             json_files = [f for f in os.listdir(data_dir) if f.endswith(".json")]
@@ -214,25 +213,25 @@ class InsuranceRecommender:
                 self.vectorstore.save_local(FAISS_DIR)
                 print(f"✅ FAISS 생성 완료: {len(documents)}개 문서 (dir={FAISS_DIR})")
         except Exception as e:
-            print(f"❌ 데이터 로드 치명적 오류: {e}")
+            print(f"데이터 로드 치명적 오류: {e}")
 
     def search_relevant_documents(self, query: str, n_results: int = 10):
         if not self.vectorstore:
-            print("⚠️ 검색 불가: 벡터스토어가 비어있음")
+            print("검색 불가: 벡터스토어가 비어있음")
             return []
         try:
             docs_with_scores = self.vectorstore.similarity_search_with_score(query, k=n_results)
             return [doc for doc, score in docs_with_scores]
         except Exception as e:
-            print(f"❌ FAISS 검색 실패: {e}")
+            print(f"FAISS 검색 실패: {e}")
             return []
 
     def generate_rag_recommendation(self, user_profile: Dict[str, Any], health_status: Dict[str, Any]) -> Dict[str, Any]:
         try:
-            # 1. 사용자 분석
+            # 사용자 분석
             analysis = self._analyze_user_profile(user_profile, health_status)
 
-            # 2. 검색 쿼리 생성 및 문서 검색
+            # 검색 쿼리 생성 및 문서 검색
             search_query = self._build_rag_query(analysis)
             relevant_docs = self.search_relevant_documents(search_query, n_results=12)
 
@@ -240,7 +239,7 @@ class InsuranceRecommender:
                 print("⚠️ 검색된 문서 없음 -> Fallback 실행")
                 return self._fallback_recommendation(user_profile, health_status)
 
-            # 3. LLM 질문 생성 및 호출
+            # LLM 질문 생성 및 호출
             context = self._build_context_from_documents(relevant_docs)
             llm_question = self._build_llm_question(analysis, context)
 
@@ -255,7 +254,7 @@ class InsuranceRecommender:
 
             return self._fallback_recommendation(user_profile, health_status)
         except Exception as e:
-            print(f"❌ RAG 프로세스 실패: {e}")
+            print(f"RAG 프로세스 실패: {e}")
             return self._fallback_recommendation(user_profile, health_status)
 
     def _build_rag_query(self, analysis: Dict[str, Any]) -> str:
@@ -353,11 +352,11 @@ class InsuranceRecommender:
                 doc = relevant_docs[idx] if idx < len(relevant_docs) else relevant_docs[0]
                 md = doc.metadata or {}
 
-                # ✅ 스펙 키로 파싱
+                # 스펙 키로 파싱
                 comp = (rec.get("insurance_company") or "").strip()
                 prod = (rec.get("product_name") or "").strip()
 
-                # ✅ FAISS 문서의 메타데이터에서 product_name이 있으면 확인
+                # FAISS 문서의 메타데이터에서 product_name이 있으면 확인
                 doc_product_name = md.get("product_name", "").strip()
                 if doc_product_name and doc_product_name != "?":
                     # 문서에서 보험사명 추출
@@ -369,28 +368,27 @@ class InsuranceRecommender:
                         # 일치하면 문서의 product_name과 보험사명 사용
                         prod = doc_product_name
                         comp = doc_insurer
-                        print(f"📄 FAISS 문서 사용: {comp} / {prod}")
+                        print(f"FAISS 문서 사용: {comp} / {prod}")
                     else:
                         # 불일치하면 LLM 추천값 사용
-                        print(f"⚠️ 보험사 불일치 - LLM: {comp}, 문서: {doc_insurer}")
-                        print(f"   → LLM 추천값 유지: {comp} / {prod}")
+                        print(f"보험사 불일치 - LLM: {comp}, 문서: {doc_insurer}")
+                        print(f"→ LLM 추천값 유지: {comp} / {prod}")
 
-                # ✅ 보험사명 정규화 (prices.json과 매칭 개선)
+                # 보험사명 정규화 (prices.json과 매칭 개선)
                 comp = self._find_matching_insurer(comp)
 
-                # ✅ 방어: LLM이 또 뒤집어 쓰는 경우 교정
+                # 방어: LLM이 또 뒤집어 쓰는 경우 교정
                 if looks_like_plan_name(comp) and looks_like_contract_name(prod):
                     plan_name = comp
                     comp = extract_insurer_name(plan_name) or comp
                     prod = plan_name
 
-                # ✅ 테이블에서 먼저 조회, 없으면 LLM 값 사용
-                # 1. 테이블에서 보험료 조회
+                #  테이블에서 먼저 조회, 없으면 LLM 값 사용
+                #  테이블에서 보험료 조회
                 monthly_cost, found_in_table = self._get_insurance_price(comp, prod)
+
                 
-                # ... 나머지 코드 동일 ...
-                
-                # 2. 테이블에 값이 없으면 LLM 값 사용
+                # 테이블에 값이 없으면 LLM 값 사용
                 if not found_in_table:
                     llm_monthly_cost = rec.get("monthly_cost")
                     if llm_monthly_cost is not None:
@@ -398,20 +396,20 @@ class InsuranceRecommender:
                             num_str = re.sub(r'[^\d]', '', llm_monthly_cost)
                             if num_str:
                                 monthly_cost = int(num_str)
-                                print(f"📋 LLM 제공 보험료 사용 (테이블 없음): {monthly_cost}원 ({comp} / {prod})")
+                                print(f"LLM 제공 보험료 사용 (테이블 없음): {monthly_cost}원 ({comp} / {prod})")
                         else:
                             monthly_cost = int(llm_monthly_cost)
-                            print(f"📋 LLM 제공 보험료 사용 (테이블 없음): {monthly_cost}원 ({comp} / {prod})")
+                            print(f"LLM 제공 보험료 사용 (테이블 없음): {monthly_cost}원 ({comp} / {prod})")
                     else:
-                        print(f"⚠️ 보험료 조회 실패 (테이블/LLM 모두 없음): {comp} / {prod}")
+                        print(f"보험료 조회 실패 (테이블/LLM 모두 없음): {comp} / {prod}")
                 else:
-                    print(f"✅ 테이블에서 보험료 조회: {monthly_cost}원 ({comp} / {prod})")
+                    print(f"테이블에서 보험료 조회: {monthly_cost}원 ({comp} / {prod})")
 
-                # ✅ 테이블에서 먼저 조회, 없으면 LLM 값 사용
-                # 1. 테이블에서 가입금액 조회
+                # 테이블에서 먼저 조회, 없으면 LLM 값 사용
+                # 테이블에서 가입금액 조회
                 sum_insured, found_in_table = self._get_sum_insured(comp, prod)
                 
-                # 2. 테이블에 값이 없으면 LLM 값 사용
+                # 테이블에 값이 없으면 LLM 값 사용
                 if not found_in_table:
                     llm_sum_insured = rec.get("sum_insured")
                     if llm_sum_insured is not None:
@@ -420,21 +418,21 @@ class InsuranceRecommender:
                                 num_str = re.sub(r'[^\d.]', '', llm_sum_insured)
                                 if num_str:
                                     sum_insured = int(float(num_str) * 10000)
-                                    print(f"📋 LLM 제공 가입금액 사용 (테이블 없음): {sum_insured}원 ({comp} / {prod})")
+                                    print(f"LLM 제공 가입금액 사용 (테이블 없음): {sum_insured}원 ({comp} / {prod})")
                             else:
                                 num_str = re.sub(r'[^\d]', '', llm_sum_insured)
                                 if num_str:
                                     sum_insured = int(num_str)
-                                    print(f"📋 LLM 제공 가입금액 사용 (테이블 없음): {sum_insured}원 ({comp} / {prod})")
+                                    print(f"LLM 제공 가입금액 사용 (테이블 없음): {sum_insured}원 ({comp} / {prod})")
                         else:
                             sum_insured = int(llm_sum_insured)
-                            print(f"📋 LLM 제공 가입금액 사용 (테이블 없음): {sum_insured}원 ({comp} / {prod})")
+                            print(f"LLM 제공 가입금액 사용 (테이블 없음): {sum_insured}원 ({comp} / {prod})")
                     else:
-                        print(f"⚠️ 가입금액 조회 실패 (테이블/LLM 모두 없음): {comp} / {prod}")
+                        print(f"가입금액 조회 실패 (테이블/LLM 모두 없음): {comp} / {prod}")
                 else:
-                    print(f"✅ 테이블에서 가입금액 조회: {sum_insured}원 ({comp} / {prod})")
+                    print(f"테이블에서 가입금액 조회: {sum_insured}원 ({comp} / {prod})")
 
-                # ✅ 특약 정보 처리 (LLM이 상세 정보를 제공한 경우)
+                # 특약 정보 처리 (LLM이 상세 정보를 제공한 경우)
                 special_contracts_data = rec.get("special_contracts", []) or []
                 
                 # 기존 형식(문자열 배열)과 새 형식(객체 배열) 모두 지원
@@ -485,7 +483,7 @@ class InsuranceRecommender:
                 },
             }
         except Exception as e:
-            print(f"❌ LLM 응답 파싱 실패: {e}")
+            print(f"LLM 응답 파싱 실패: {e}")
             import traceback
             traceback.print_exc()
             return {"items": []}
@@ -553,7 +551,7 @@ class InsuranceRecommender:
                             return self._parse_sum_insured_value(value), True
         
         # 매칭 실패 시 기본값
-        print(f"⚠️ 가입금액 매칭 실패: {c} / {p} (정규화: {normalized_p})")
+        print(f"가입금액 매칭 실패: {c} / {p} (정규화: {normalized_p})")
         return 10000000, False
 
     def _get_insurance_price(self, c, p):
@@ -582,7 +580,7 @@ class InsuranceRecommender:
                             return self._parse_price_value(value), True
         
         # 매칭 실패 시 기본값
-        print(f"⚠️ 보험료 매칭 실패: {c} / {p} (정규화: {normalized_p})")
+        print(f"보험료 매칭 실패: {c} / {p} (정규화: {normalized_p})")
         return 30000, False
 
     def _parse_sum_insured_value(self, value):
