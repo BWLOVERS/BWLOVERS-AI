@@ -42,9 +42,15 @@ def any_to_date(v):
             return None
     return v
 
+# --- 직업 스키마 ---
+class JobIn(BaseModel):
+    jobId: Optional[int] = None
+    jobName: Optional[str] = None
+    riskLevel: Optional[int] = None
+
 # --- 보험 추천 요청 스키마 (Java DTO와 1:1 매칭) ---
 class UserProfileIn(BaseModel):
-    """Java의 PregnancyInfoRequest 구조"""
+    infoId: Optional[int] = None
     userId: Optional[Union[int, str]] = None
     birthDate: Optional[Any] = None
     height: Optional[int] = None
@@ -55,32 +61,38 @@ class UserProfileIn(BaseModel):
     expectedDate: Optional[Any] = None
     isMultiplePregnancy: Optional[bool] = None
     miscarriageHistory: Optional[int] = 0
-    jobName: Optional[str] = None
+    jobs: Optional[List[JobIn]] = Field(default_factory=list)
 
     @field_validator("birthDate", "expectedDate", mode="before")
     def parse_dates(cls, v):
         return any_to_date(v)
 
 class PastDisease(BaseModel):
+    pastId: Optional[int] = None
     pastDiseaseType: str
     pastCured: bool
-    pastLastTreatedAt: Optional[str] = None
+    pastLastTreatedYm: Optional[str] = None # YYYYMM
 
 class ChronicDisease(BaseModel):
+    chronicId: Optional[int] = None
     chronicDiseaseType: str
     chronicOnMedication: bool
 
+class PregnancyComplication(BaseModel):
+    complicationId: Optional[int] = None
+    pregnancyComplicationType: str
+
 class HealthStatusIn(BaseModel):
-    """Java의 HealthStatusRequest 구조"""
+    statusId: Optional[int] = None
     userId: Optional[Union[int, str]] = None
+    createdAt: Optional[Any] = None
     pastDiseases: List[PastDisease] = Field(default_factory=list)
     chronicDiseases: List[ChronicDisease] = Field(default_factory=list)
-    pregnancyComplications: List[str] = Field(default_factory=list)
+    pregnancyComplications: List[PregnancyComplication] = Field(default_factory=list)
 
 class BackendRequest(BaseModel):
-    """Java: FastApiRequest { user_profile, health_status }"""
-    user_profile: UserProfileIn
-    health_status: HealthStatusIn
+    pregnancyInfo: UserProfileIn
+    healthStatus: HealthStatusIn  
 
 # --- 보험 추천 응답 스키마 ---
 
@@ -145,24 +157,36 @@ async def root():
 async def recommend(request: BackendRequest):
     try:
         # 1. 데이터 추출
-        u_prof = request.user_profile
-        h_stat = request.health_status
+        u_prof = request.pregnancyInfo
+        h_stat = request.healthStatus
         
         log.info(f"[요청 수신] user_id={u_prof.userId}, 주수={u_prof.gestationalWeek}")
         
         # 2. 추천 엔진용 Dictionary 변환 (필드명 보정)
-        # 추천 엔진 내부의 _analyze_user_profile이 기대하는 키값들을 명시적으로 세팅
         user_profile_dict = u_prof.model_dump()
         user_profile_dict['gestational_week'] = u_prof.gestationalWeek
         user_profile_dict['is_multiple_pregnancy'] = u_prof.isMultiplePregnancy
         user_profile_dict['miscarriage_history'] = u_prof.miscarriageHistory
+        # jobs 리스트에서 첫 번째 직업명 추출
+        if u_prof.jobs:
+            user_profile_dict['jobName'] = u_prof.jobs[0].jobName
+        else:
+            user_profile_dict['jobName'] = None
         
         health_status_dict = h_stat.model_dump()
+        # pregnancyComplications 객체 배열 → 문자열 배열로 변환
+        health_status_dict['pregnancyComplications'] = [
+            c.pregnancyComplicationType for c in h_stat.pregnancyComplications
+        ]
+        # pastDiseases의 날짜 필드명 보정 (Ym → At)
+        for d in health_status_dict.get('pastDiseases', []):
+            if 'pastLastTreatedYm' in d:
+                d['pastLastTreatedAt'] = d.pop('pastLastTreatedYm')
         
         # 3. RAG 추천 엔진 호출
         recommendation_result = recommender.generate_rag_recommendation(user_profile_dict, health_status_dict)
         
-        # 4. 결과 처리 (Fallback 여부 확인 및 ID 정리)
+        # 4. 결과 처리
         items = recommendation_result.get("items", [])
         raw_id = recommendation_result.get("resultId", uuid.uuid4().hex[:8])
         clean_id = raw_id.replace("rag-", "")
