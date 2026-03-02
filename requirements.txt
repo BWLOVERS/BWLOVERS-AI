@@ -12,6 +12,3 @@ llama-index
 llama-parse
 python-dotenv
 ipykernel
-fastapi
-uvicorn
-requests
