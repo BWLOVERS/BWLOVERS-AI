@@ -6,11 +6,13 @@ from typing import Dict, Any, List, Optional
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 
+
 def _first_existing_dir(candidates: List[Optional[str]]) -> Optional[str]:
     for c in candidates:
         if c and os.path.exists(c):
             return os.path.abspath(c)
     return None
+
 
 def _resolve_faiss_dir() -> str:
     env_dir = os.getenv("FAISS_DB_DIR")
@@ -21,325 +23,381 @@ def _resolve_faiss_dir() -> str:
         "/app/faiss_index",
         "/faiss_index",
     ]
-    return _first_existing_dir(candidates) or os.path.abspath(os.path.join(CURRENT_DIR, "faiss_index"))
+    return _first_existing_dir(candidates) or os.path.abspath(
+        os.path.join(CURRENT_DIR, "faiss_index")
+    )
+
 
 FAISS_DIR = _resolve_faiss_dir()
 
-# FAISS 기반 RAG + LLM 관련 임포트
 try:
+    from dotenv import load_dotenv
     from langchain_community.vectorstores import FAISS
     from langchain_huggingface import HuggingFaceEmbeddings
-    from langchain_core.documents import Document
-    from rag_pipeline import ask_question
-    
-    # insurance_recommender에서 이미 로드된 vectorstore 재사용 가능
-    # 또는 독립적으로 로드
-    
+    from langchain_openai import ChatOpenAI
+
+    load_dotenv()
+
     embeddings = HuggingFaceEmbeddings(
         model_name="jhgan/ko-sroberta-multitask",
         model_kwargs={"device": "cpu"},
         encode_kwargs={"normalize_embeddings": True},
     )
+
     index_file = os.path.join(FAISS_DIR, "index.faiss")
     if os.path.exists(index_file):
-        vectorstore = FAISS.load_local(FAISS_DIR, embeddings, allow_dangerous_deserialization=True)
-        print(f"✅ 보험 시뮬레이션: FAISS 벡터스토어 로드됨: {vectorstore.index.ntotal}개 문서 (dir={FAISS_DIR})")
+        vectorstore = FAISS.load_local(
+            FAISS_DIR, embeddings, allow_dangerous_deserialization=True
+        )
+        print(
+            f"✅ 보험 시뮬레이션: FAISS 벡터스토어 로드됨: "
+            f"{vectorstore.index.ntotal}개 문서 (dir={FAISS_DIR})"
+        )
     else:
         vectorstore = None
         print(f"보험 시뮬레이션: FAISS 벡터스토어 없음 (dir={FAISS_DIR})")
-    
+
+    llm = ChatOpenAI(model_name="gpt-4o-mini", temperature=0)
     RAG_AVAILABLE = True
+
 except Exception as e:
-    print(f"보험 시뮬레이션 RAG 시스템 초기화 실패: {e}")
+    print(f"보험 시뮬레이션 RAG/LLM 시스템 초기화 실패: {e}")
     vectorstore = None
     embeddings = None
+    llm = None
     RAG_AVAILABLE = False
-    CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 class InsuranceSimulator:
     def __init__(self):
         self.vectorstore = vectorstore
         self.embeddings = embeddings
-    
+        self.llm = llm
+
+    # ──────────────────────────────────────────────
+    # 공개 메서드
+    # ──────────────────────────────────────────────
+
     def analyze_simulation(
         self,
         insurance_company: str,
         product_name: str,
         special_contracts: List[Dict[str, Any]],
-        question: str
+        question: str,
     ) -> Dict[str, Any]:
-        """
-        특정 보험 상품과 특약에 대한 시뮬레이션 질문을 분석합니다.
-        
-        Returns:
-            {
-                "simulationId": str,
-                "result": str  # LLM이 생성한 자연어 답변
-            }
-        """
         try:
             if not self.vectorstore:
                 return {
                     "simulationId": uuid.uuid4().hex[:8],
-                    "result": "보험 약관 데이터베이스를 사용할 수 없습니다."
+                    "result": "보험 약관 데이터베이스를 사용할 수 없습니다.",
                 }
-            
-            # 1. 검색 쿼리 생성
-            search_query = self._build_simulation_query(
-                insurance_company,
-                product_name,
-                special_contracts,
-                question
-            )
-            
-            # 2. 관련 문서 검색
+            if not self.llm:
+                return {
+                    "simulationId": uuid.uuid4().hex[:8],
+                    "result": "LLM을 사용할 수 없습니다. OPENAI_API_KEY를 확인해주세요.",
+                }
+
             relevant_docs = self._search_simulation_documents(
-                insurance_company,
-                product_name,
-                special_contracts,
-                question,
-                search_query
+                insurance_company=insurance_company,
+                product_name=product_name,
+                special_contracts=special_contracts,
+                question=question,
             )
-            
+
             if not relevant_docs:
                 return {
                     "simulationId": uuid.uuid4().hex[:8],
-                    "result": "관련 약관 정보를 찾을 수 없어 보장 여부를 확인할 수 없습니다."
+                    "result": "관련 약관 정보를 찾을 수 없어 보장 여부를 확인할 수 없습니다.",
                 }
-            
-            # 3. LLM을 통한 시뮬레이션 분석
+
+            pages = sorted({
+                int(d.metadata.get("page_number"))
+                for d in relevant_docs
+                if (d.metadata or {}).get("page_number") is not None
+            })
+            print(f"시뮬레이션 선택 문서 수: {len(relevant_docs)}")
+            print(f"시뮬레이션 선택 문서 페이지: {pages}")
+
             context = self._build_simulation_context(relevant_docs, special_contracts)
-            llm_question = self._build_simulation_llm_question(
-                insurance_company,
-                product_name,
-                special_contracts,
-                question,
-                context
+            prompt = self._build_simulation_llm_question(
+                insurance_company=insurance_company,
+                product_name=product_name,
+                special_contracts=special_contracts,
+                question=question,
+                context=context,
             )
-            
+
             print(f"보험 시뮬레이션 LLM 요청 중... (보험사: {insurance_company})")
-            rag_result = ask_question(llm_question)
-            
-            if rag_result and "answer" in rag_result:
-                # LLM의 답변을 포맷팅하여 result로 사용
-                result_text = self._format_llm_response(rag_result["answer"])
-                
-                return {
-                    "simulationId": uuid.uuid4().hex[:8],
-                    "result": result_text
-                }
-            
-            return {
-                "simulationId": uuid.uuid4().hex[:8],
-                "result": "분석 중 오류가 발생했습니다."
-            }
-            
+            result_text = self._invoke_simulation_llm(prompt)
+
+            return {"simulationId": uuid.uuid4().hex[:8], "result": result_text.strip()}
+
         except Exception as e:
             print(f"시뮬레이션 분석 실패: {e}")
             return {
                 "simulationId": uuid.uuid4().hex[:8],
-                "result": f"분석 중 오류가 발생했습니다: {str(e)}"
+                "result": f"분석 중 오류가 발생했습니다: {str(e)}",
             }
-    
-    def _build_simulation_query(
-        self,
-        insurance_company: str,
-        product_name: str,
-        special_contracts: List[Dict[str, Any]],
-        question: str
-    ) -> str:
-        """시뮬레이션 검색 쿼리 생성"""
-        parts = [question]
-        parts.append(insurance_company)
-        parts.append(product_name)
-        
-        # 특약명 추가
-        for sc in special_contracts:
-            contract_name = sc.get("contract_name", "")
-            if contract_name:
-                parts.append(contract_name)
-        
-        return " ".join(parts)
-    
+
+    # ──────────────────────────────────────────────
+    # 내부 유틸
+    # ──────────────────────────────────────────────
+
+    def _normalize(self, s: Optional[str]) -> str:
+        if not s:
+            return ""
+        return re.sub(r"\s+", "", str(s)).lower()
+
+    def _is_same_product(self, md: Dict[str, Any], insurance_company: str, product_name: str) -> bool:
+        n_co = self._normalize(insurance_company)
+        n_pr = self._normalize(product_name)
+        co = self._normalize(md.get("company", "") or md.get("insurance_company", ""))
+        pr = self._normalize(md.get("product_name", ""))
+        sf = self._normalize(md.get("source_file", ""))
+        product_ok = n_pr and (n_pr in pr or n_pr in sf)
+        company_ok = (not n_co) or (n_co in co or n_co in pr or n_co in sf)
+        return bool(product_ok and company_ok)
+
+    def _contract_keywords(self, contract_name: str) -> List[str]:
+        """특약명에서 의미있는 키워드만 추출."""
+        stopwords = {
+            "특약", "특별약관", "약관", "무배당", "갱신형", "진단", "진단비",
+            "보장", "계약", "d", "k", "ii", "iii", "iv", "무", "배당"
+        }
+        tokens = re.findall(r"[가-힣A-Za-z0-9]+", contract_name.lower())
+        kws = [t for t in tokens if t not in stopwords and len(t) >= 2]
+        return kws if kws else [self._normalize(contract_name)]
+
+    # ──────────────────────────────────────────────
+    # 문서 검색: 특약 중심, 핵심 페이지만
+    # ──────────────────────────────────────────────
+
     def _search_simulation_documents(
         self,
         insurance_company: str,
         product_name: str,
         special_contracts: List[Dict[str, Any]],
         question: str,
-        search_query: str
     ) -> List:
-        """시뮬레이션 관련 문서 검색 (특약 페이지 우선)"""
+        """
+        전략:
+        1) 특약명 키워드로 직접 검색 → 가장 정확한 조항 청크
+        2) 요청 page_number 근처 ±50 페이지 검색
+        3) 질문 내용으로 시맨틱 검색
+        4) 모두 동일 상품 필터 후 중복 제거
+        → 총 20~30개 이내로 제한 (LLM 집중도 유지)
+        """
         if not self.vectorstore:
             return []
-        
+
         try:
-            # 일반 검색
-            docs_with_scores = self.vectorstore.similarity_search_with_score(search_query, k=20)
-            docs = [doc for doc, score in docs_with_scores]
-            
-            # 보험사 및 상품명 필터링
-            filtered_docs = []
-            for doc in docs:
-                md = doc.metadata or {}
-                doc_product = md.get("product_name", "")
-                
-                # 보험사명이 포함되어 있는지 확인
-                if insurance_company in doc_product or insurance_company in str(md):
-                    # 상품명이 포함되어 있는지 확인
-                    if product_name in doc_product or product_name in str(md):
-                        filtered_docs.append(doc)
-            
-            # 특약 페이지 우선 검색
-            special_contract_docs = []
+            pool: Dict[str, Any] = {}  # chunk_key -> (doc, priority)
+
+            n_co = self._normalize(insurance_company)
+            n_pr = self._normalize(product_name)
+
+            def add_docs(docs_iter, priority: int):
+                for doc in docs_iter:
+                    md = doc.metadata or {}
+                    if not self._is_same_product(md, insurance_company, product_name):
+                        continue
+                    key = md.get("chunk_id") or (
+                        f"{md.get('page_number','?')}::{self._normalize(doc.page_content[:80])}"
+                    )
+                    # 우선순위 낮을수록 중요 (1이 가장 중요)
+                    if key not in pool or pool[key][1] > priority:
+                        pool[key] = (doc, priority)
+
+            # ① 특약별 핵심 검색
             for sc in special_contracts:
-                page_num = sc.get("page_number")
-                contract_name = sc.get("contract_name", "")
-                
-                if page_num:
-                    # 해당 페이지 번호의 문서 검색
-                    for doc in filtered_docs:
-                        md = doc.metadata or {}
-                        doc_page = md.get("page_number")
-                        if doc_page and abs(int(doc_page) - int(page_num)) <= 5:  # ±5 페이지 범위
-                            if contract_name in doc.page_content or contract_name in str(md):
-                                special_contract_docs.append(doc)
-            
-            # 특약 문서를 우선, 나머지는 일반 문서
-            result = []
-            seen = set()
-            for doc in special_contract_docs + filtered_docs:
-                md = doc.metadata or {}
-                doc_id = f"{md.get('page_number', '')}_{doc.page_content[:50]}"
-                if doc_id not in seen:
-                    seen.add(doc_id)
-                    result.append(doc)
-            return result[:10]  # !!! 상위 10개만
-            
+                cn = sc.get("contract_name", "")
+                pn = sc.get("page_number")
+                kws = self._contract_keywords(cn)
+
+                # 특약명 직접 쿼리 (가장 높은 우선순위)
+                q1 = f"{cn} 지급사유 보험기간 면책 보장개시일 진단 확정"
+                r1 = self.vectorstore.similarity_search(q1, k=50)
+                add_docs(r1, priority=1)
+
+                # 키워드 하나씩 쿼리
+                for kw in kws[:3]:
+                    q2 = f"{insurance_company} {product_name} {kw} 약관 조항"
+                    r2 = self.vectorstore.similarity_search(q2, k=30)
+                    add_docs(r2, priority=2)
+
+                # 요청 page_number 기반: 같은 상품 전체에서 페이지 범위 필터
+                if pn:
+                    try:
+                        req_page = int(pn)
+                        # 시맨틱 검색 풀에서 페이지 범위가 맞는 것 찾기
+                        q3 = f"{cn} 약관"
+                        r3 = self.vectorstore.similarity_search(q3, k=120)
+                        for doc in r3:
+                            md = doc.metadata or {}
+                            if not self._is_same_product(md, insurance_company, product_name):
+                                continue
+                            dp = md.get("page_number")
+                            if dp is not None and abs(int(dp) - req_page) <= 50:
+                                key = md.get("chunk_id") or (
+                                    f"{dp}::{self._normalize(doc.page_content[:80])}"
+                                )
+                                if key not in pool or pool[key][1] > 3:
+                                    pool[key] = (doc, 3)
+                    except Exception:
+                        pass
+
+            # ② 질문 내용으로 시맨틱 검색
+            q4 = f"{insurance_company} {product_name} {question}"
+            r4 = self.vectorstore.similarity_search(q4, k=60)
+            add_docs(r4, priority=4)
+
+            if not pool:
+                return []
+
+            # ③ 우선순위 낮은 순으로 정렬 후 상위 25개
+            sorted_docs = sorted(pool.values(), key=lambda x: x[1])
+            top_docs = [doc for doc, _ in sorted_docs[:25]]
+
+            # ④ 페이지 기준 정렬 (읽기 순서 유지)
+            top_docs.sort(key=lambda d: int((d.metadata or {}).get("page_number", 10**9)))
+
+            return top_docs
+
         except Exception as e:
             print(f"시뮬레이션 문서 검색 실패: {e}")
             return []
-    
+
+    # ──────────────────────────────────────────────
+    # 컨텍스트 빌드
+    # ──────────────────────────────────────────────
+
     def _build_simulation_context(
         self,
         documents: List,
-        special_contracts: List[Dict[str, Any]]
+        special_contracts: List[Dict[str, Any]],
     ) -> str:
-        """시뮬레이션 컨텍스트 생성"""
         parts = []
-        
-        # 특약 정보 추가
+
         if special_contracts:
             parts.append("=== 가입 특약 정보 ===")
             for sc in special_contracts:
-                parts.append(f"- {sc.get('contract_name', '')} (페이지: {sc.get('page_number', '?')})")
+                parts.append(
+                    f"- {sc.get('contract_name', '')} "
+                    f"(요청 페이지: {sc.get('page_number', '?')})"
+                )
             parts.append("")
-        
-        # 문서 내용 추가
+
         parts.append("=== 보험 약관 정보 ===")
-        for i, doc in enumerate(documents[:8]):
+        for i, doc in enumerate(documents, 1):
             md = doc.metadata or {}
-            page_num = md.get("page_number", "?")
+            pn = md.get("page_number", "?")
+            title = (md.get("section_title") or "")[:80]
+            content = (doc.page_content or "").strip()
             parts.append(
-                f"[문서 {i+1}] 페이지:{page_num}\n"
-                f"내용:{doc.page_content[:1000]}"
+                f"\n[약관 {i}] p.{pn} | {title}\n{content}\n---"
             )
-            parts.append("---")
-        
+
         return "\n".join(parts)
-    
+
+    # ──────────────────────────────────────────────
+    # 프롬프트: JSON 없이 자연어로 직접 출력
+    # ──────────────────────────────────────────────
+
     def _build_simulation_llm_question(
         self,
         insurance_company: str,
         product_name: str,
         special_contracts: List[Dict[str, Any]],
         question: str,
-        context: str
+        context: str,
     ) -> str:
-        """시뮬레이션 LLM 질문 생성"""
-        special_contracts_text = "\n".join([
-            f"- {sc.get('contract_name', '')} (페이지: {sc.get('page_number', '?')})"
-            for sc in special_contracts
-        ]) if special_contracts else "없음"
-        
-        return f"""
-역할: 보험 약관 전문가 및 보장 분석가
+        sc_text = (
+            "\n".join(
+                f"- {sc.get('contract_name', '')} (요청 페이지: {sc.get('page_number', '?')})"
+                for sc in special_contracts
+            )
+            if special_contracts
+            else "없음"
+        )
 
-보험 정보:
+        return f"""당신은 10년 경력의 보험 약관 전문 상담사입니다.
+아래 [보험 약관 정보]를 꼼꼼히 읽고, 고객의 질문에 대해 전문적이고 친절하게 답변하세요.
+반드시 약관에 명시된 내용만 근거로 사용하고, 약관에 없는 내용은 추측하지 마세요.
+
+[보험 정보]
 - 보험사: {insurance_company}
 - 상품명: {product_name}
 - 가입 특약:
-{special_contracts_text}
+{sc_text}
 
-시뮬레이션 질문:
+[고객 질문]
 {question}
 
-지침:
-1. 제공된 보험 약관 정보를 바탕으로 위 시뮬레이션 상황에 대한 보장 가능 여부를 분석하세요.
-2. 보장 가능한 경우: 보장 내용, 지급 금액, 조건 등을 구체적으로 설명하세요.
-3. 보장 불가능한 경우: 보장되지 않는 이유, 제한 사항 등을 명확히 설명하세요.
-4. 특약이 가입되어 있다면 해당 특약의 보장 범위를 우선적으로 확인하세요.
-5. 사용자가 이해하기 쉽도록 자연스러운 한국어로 답변하세요.
-6. 약관의 구체적인 내용과 페이지 번호를 참고하여 정확하게 답변하세요.
-7. 답변은 자연스러운 문장으로 작성하되, 보장 여부, 보장 내용, 제한 사항 등을 명확히 포함하세요.
+[답변 형식 - 반드시 이 순서와 항목으로 작성]
+
+## 결론
+보장 가능 여부를 한 문장으로 명확하게 말씀드립니다.
+(예: "네, 보장됩니다." / "아니요, 보장되지 않습니다." / "조건에 따라 다릅니다.")
+
+## 왜 그렇게 판단했나요?
+약관의 어떤 조항을 근거로 위 결론을 내렸는지 2~4문장으로 설명합니다.
+반드시 조항명과 약관 페이지를 명시하세요.
+예: "약관 제2-2조(보험금의 지급사유, p.466)에 따르면 ..."
+
+## 보험금 지급 기준
+- 지급 여부: 예 / 아니오
+- 지급 기준: (예: 특약가입금액의 2% 등 약관에 명시된 지급률)
+- 지급 횟수: (예: 최초 1회 한정 등)
+- 지급 제한: (없으면 "특별한 제한 없음"으로 기재)
+
+## 보험기간 및 보장개시일
+이 특약의 보험기간이 언제부터 언제까지인지, 보장이 시작되는 시점이 언제인지 설명합니다.
+(예: 계약일부터 분만일까지 등)
+
+## 이 경우 지급 조건 충족 여부
+고객이 말한 상황(임신 20주차, 진단 등)이 약관의 지급 조건을 충족하는지
+항목별로 체크해서 알려주세요.
+- 조건 1: 충족 여부
+- 조건 2: 충족 여부
+
+## 면책 및 제외 사항
+이 특약에서 보장하지 않는 경우가 있다면 설명합니다.
+약관에 없으면 "약관에 별도 면책 조항 없음"으로 기재합니다.
+
+## 고객이 준비해야 할 것
+보험금 청구를 위해 실제로 필요한 서류나 절차를 3~5가지로 정리합니다.
+(예: 진단서, 진단 확정일 기재된 의무기록 등)
+
+## 약관 근거 정리
+이 답변에 사용한 약관 조항을 명확하게 인용합니다.
+- [p.XXX] 조항명: 인용 내용
+- [p.XXX] 조항명: 인용 내용
 
 [보험 약관 정보]
 {context}
-
-위 질문에 대해 보험 약관을 바탕으로 상세하고 정확하게 답변해주세요.
 """
-    
-    def _format_llm_response(self, llm_response: str) -> str:
-        """LLM 응답을 자연어 형식으로 변환"""
-        try:
-            # JSON 형식인지 확인
-            json_block = re.search(r"(\{.*\})", llm_response, re.DOTALL)
-            if json_block:
-                data = json.loads(self._fix_json_string(json_block.group(1)))
-                
-                # 자연어 형식으로 변환
-                parts = []
-                
-                # 보장 여부
-                is_covered = data.get("is_covered", False)
-                if is_covered:
-                    parts.append("보장 가능합니다.")
-                else:
-                    parts.append("보장되지 않습니다.")
-                parts.append("")
-                
-                # 분석 내용
-                if data.get("analysis"):
-                    parts.append(f"{data['analysis']}")
-                    parts.append("")
-                
-                # 보장 상세 내용
-                if data.get("coverage_details"):
-                    parts.append(f"보장 상세 내용:")
-                    parts.append(f"{data['coverage_details']}")
-                    parts.append("")
-                
-                # 제한 사항
-                limitations = data.get("limitations", [])
-                if limitations:
-                    parts.append("제한 사항:")
-                    for limitation in limitations:
-                        parts.append(f"- {limitation}")
-                
-                return "\n".join(parts)
-            else:
-                # JSON이 아니면 그대로 반환 (이미 자연어 형식)
-                return llm_response.strip()
-        except Exception as e:
-            print(f"LLM 응답 포맷팅 실패, 원본 반환: {e}")
-            # 파싱 실패 시 원본 반환
-            return llm_response.strip()
-    
-    def _fix_json_string(self, s: str) -> str:
-        """JSON 문자열 정리"""
-        s = s.replace("「", "'").replace("」", "'").replace(""", "'").replace(""", "'")
-        return s.replace("True", "true").replace("False", "false").replace("None", "null")
+
+    # ──────────────────────────────────────────────
+    # LLM 호출 (JSON 파싱 없음 → 자연어 그대로 반환)
+    # ──────────────────────────────────────────────
+
+    def _invoke_simulation_llm(self, prompt: str) -> str:
+        response = self.llm.invoke(
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "당신은 보험 약관 전문 상담사입니다. "
+                        "고객이 이해하기 쉽도록 친절하고 정확하게 답변하되, "
+                        "반드시 제공된 약관 조항을 근거로만 답변합니다. "
+                        "약관에 없는 내용은 절대 추측하거나 만들어내지 마세요. "
+                        "답변은 항상 구조화된 형식으로, 충분히 상세하게 작성하세요."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ]
+        )
+        return response.content if hasattr(response, "content") else str(response)
 
 
 # 싱글톤 인스턴스

@@ -1,0 +1,260 @@
+[
+    {
+      "insurance_id": "KYOLIFE-KID-001",
+      "company": "교보라이프플래닛생명",
+      "product_name": "무배당 교보라플 아이사랑보험",
+      "variants": [
+        {
+          "variant_id": "KYOLIFE-KID-001-V01",
+          "variant_name": "기본형",
+          "description": "무배당 교보라플 아이사랑보험"
+        }
+      ],
+      "files": {
+        "policy": "(무)교보라플 아이사랑보험 20260101 41 보험약관.pdf",
+        "summary": "(무)교보라플 아이사랑보험 20260101 41 상품요약서.pdf"
+      }
+    },
+    {
+      "insurance_id": "KYOLIFE-KID-002",
+      "company": "교보라이프플래닛생명",
+      "product_name": "무배당 교보라플 어린이보험",
+      "variants": [
+        {
+          "variant_id": "KYOLIFE-KID-002-V01",
+          "variant_name": "순수보장형",
+          "description": "보험료 부담을 낮춘 보장 중심형"
+        }
+      ],
+      "files": {
+        "policy": "(무)교보라플 어린이보험(순수보장형) 20260101 41 보험약관.pdf",
+        "summary": "(무)교보라플 어린이보험(순수보장형) 20260101 41 상품요약서.pdf"
+      }
+    },
+    {
+      "insurance_id": "KYOLIFE-KID-003",
+      "company": "교보라이프플래닛생명",
+      "product_name": "무배당 교보라플 어린이종합보험",
+      "variants": [
+        {
+          "variant_id": "KYOLIFE-KID-003-V01",
+          "variant_name": "순수보장형",
+          "description": "종합 보장 구성의 순수보장형"
+        }
+      ],
+      "files": {
+        "policy": "(무)교보라플 어린이종합보험(순수보장형) 20260101 41 보험약관.pdf",
+        "summary": "(무)교보라플 어린이종합보험(순수보장형) 20260101 41 상품요약서.pdf"
+      }
+    },
+    {
+      "insurance_id": "DB-KID-001",
+      "company": "DB생명",
+      "product_name": "무배당 백년친구 내가고른 어린이보험(2601)",
+      "variants": [
+        {
+          "variant_id": "DB-KID-001-V01",
+          "variant_name": "표준형",
+          "description": "기본 환급 구조의 표준형"
+        },
+        {
+          "variant_id": "DB-KID-001-V02",
+          "variant_name": "해약환급금 미지급형",
+          "description": "표준형의 해약환급금의 50%에 해당하는 금액을 지급"
+        }
+      ],
+      "files": {
+        "policy": "(무)백년친구 내가고른 어린이보험(2601) 보험약관.pdf",
+        "summary": "(무)백년친구 내가고른 어린이보험(2601) 상품요약서.pdf"
+      }
+    },
+    {
+        "insurance_id": "ABL-KID-001",
+        "company": "ABL생명",
+        "product_name": "무배당 우리WON어린이보험(2601)",
+        "variants": [
+          {
+            "variant_id": "ABL-KID-001-V01",
+            "variant_name": "1형(재해장해보장형) 기본형",
+            "description": "1형(재해장해보장형)의 기본형"
+          },
+          {
+            "variant_id": "ABL-KID-001-V02",
+            "variant_name": "1형(재해장해보장형) 해약환급금 미지급형",
+            "description": "1형(재해장해보장형)의 해약환급금 미지급형"
+          },
+          {
+            "variant_id": "ABL-KID-001-V03",
+            "variant_name": "2형(일반암진단보장형) 기본형",
+            "description": "2형(일반암진단보장형)의 기본형"
+          },
+          {
+            "variant_id": "ABL-KID-001-V04",
+            "variant_name": "2형(일반암진단보장형) 해약환급금 미지급형",
+            "description": "2형(일반암진단보장형)의 해약환급금 미지급형"
+          }
+        ],
+        "files": {
+          "policy": "(무)우리WON어린이보험_보험약관(2601).pdf",
+          "summary": "(무)우리WON어린이보험_상품요약서(260101).pdf"
+        }
+    },
+    {
+      "insurance_id": "KYOBO-KID-001",
+      "company": "교보생명",
+      "product_name": "교보우리아이보험 [2405](무배당,갱신형)",
+      "variants": [
+        {
+          "variant_id": "KYOBO-KID-001-V01",
+          "variant_name": "무배당 갱신형",
+          "description": "교보우리아이보험 무배당 갱신형"
+        }
+      ],
+      "files": {
+        "policy": "교보우리아이보험 [2405](무배당,갱신형) 보험약관.pdf",
+        "summary": "교보우리아이보험 [2405](무배당,갱신형) 상품요약서(2026.01.01).pdf"
+      }
+    },
+    {
+      "insurance_id": "MET-KID-001",
+      "company": "메트라이프생명",
+      "product_name": "무배당 iLove아이보험",
+      "variants": [
+        {
+          "variant_id": "MET-KID-001-V01",
+          "variant_name": "기본형",
+          "description": "메트라이프생명 무배당 iLove아이보험 기본형"
+        }
+      ],
+      "files": {
+        "policy": "보험약관_무배당 iLove아이보험_11852_20260101.pdf",
+        "summary": "상품요약서_무배당ilove아이보험_20260101.pdf"
+      }
+    },
+    {
+      "insurance_id": "MET-KID-002",
+      "company": "메트라이프생명",
+      "product_name": "무배당 아이사랑첫보험",
+      "variants": [
+        {
+          "variant_id": "MET-KID-002-V01",
+          "variant_name": "순수보장형",
+          "description": "환급금 없이 보장 중심형"
+        },
+        {
+          "variant_id": "MET-KID-002-V02",
+          "variant_name": "50%만기환급형",
+          "description": "만기 시 납입보험료 50% 환급형"
+        }
+      ],
+      "files": {
+        "policy": "보험약관_무배당 아이사랑첫보험(순수보장형,50%만기환급형)_20260101.pdf",
+        "summary": "상품요약서_무배당 아이사랑첫보험(순수보장형,50%만기환급형)_20260101.pdf"
+      }
+    },
+    {
+      "insurance_id": "SAM-KID-001",
+      "company": "삼성생명",
+      "product_name": "삼성 우리아이 올바른 성장보험(2405)(무배당)",
+      "variants": [
+        {
+          "variant_id": "SAM-KID-001-V01",
+          "variant_name": "1종",
+          "description": "30세형 : 성장기에 꼭 필요한 필수보장 + 성장지원금 등 핵심 보장에 집중"
+        },
+        {
+          "variant_id": "SAM-KID-001-V02",
+          "variant_name": "2종",
+          "description": "100세형 : 미래의 성인기까지 발생 가능한 위험까지 포함하는 장기 보장에 집중"
+        }
+      ],
+      "files": {
+        "policy": "삼성우리아이올바른성장보험(2405)(무배당) 보험약관.pdf",
+        "summary": "삼성우리아이올바른성장보험(2405)(무배당) 상품요약서.pdf"
+      }
+    },
+    {
+      "insurance_id": "SHN-KID-001",
+      "company": "신한라이프생명",
+      "product_name": "신한통합건강보험 주니어큐브",
+      "variants": [
+        {
+          "variant_id": "SHN-KID-001-V01",
+          "variant_name": "일반형",
+          "description": "일반형"
+        },
+        {
+          "variant_id": "SHN-KID-001-V02",
+          "variant_name": "해약환급금 미지급형",
+          "description": "보험료 납입기간 중 계약이 해지될 경우 해약환급금이 없는 대신 일반형보다 낮은 보험료로 동일한 보장을 받을 수 있도록 한 상품"
+        }
+      ],
+      "files": {
+        "policy": "판매약관_신한통합건강보험 주니어큐브(무배당, 해약환급금 미지급형)_260101.pdf",
+        "summary": "상품요약서_신한통합건강보험 주니어큐브(무배당, 해약환급금 미지급형)_260101.pdf"
+      }
+    },
+    {
+      "insurance_id": "SHN-KID-002",
+      "company": "신한라이프생명",
+      "product_name": "신한통합건강보험 주니어올터치",
+      "variants": [
+        {
+          "variant_id": "SHN-KID-002-V01",
+          "variant_name": "일반형",
+          "description": "일반형"
+        },
+        {
+          "variant_id": "SHN-KID-002-V02",
+          "variant_name": "해약환급금 미지급형",
+          "description": "보험료 납입기간 중 계약이 해지될 경우 해약환급금이 없는 대신 일반형보다 낮은 보험료로 동일한 보장을 받을 수 있도록 한 상품"
+        }
+      ],
+      "files": {
+        "policy": "판매약관_신한통합건강보험 주니어올터치(무배당, 해약환급금 미지급형)_260101.pdf",
+        "summary": null
+      }
+    },
+    {
+        "insurance_id": "DYANG-KID-001",
+        "company": "동양생명",
+        "product_name": "무배당우리WON하는꿈나무우리아이보험",
+        "variants": [
+          {
+            "variant_id": "DYANG-KID-001-V01",
+            "variant_name": "표준형",
+            "description": "표준형"
+          },
+          {
+            "variant_id": "DYANG-KID-001-V02",
+            "variant_name": "해약환급금 미지급형",
+            "description": "보험료 납입기간 중 계약이 해지될 경우 지급하는 해약환급금이 없으며, 보험료 납입기간이 완료된 이후 계약이 해지되는 경우에는 표준형 해약환급금의 50%에 해당하는 금액을 지급합니다."
+          },
+          {
+            "variant_id": "DYANG-KID-001-V03",
+            "variant_name": "만기환급형",
+            "description": "만기환급형"
+          }
+        ],
+        "files": {
+          "policy": "(무)우리WON하는꿈나무우리아이보험_전속설계사용.pdf",
+          "summary": "상품요약서_무배당우리WON하는꿈나무우리아이보험(표준형, 만기환급형, 해약환급금 미지급형)_20260101.pdf"
+        }
+    },
+    {
+        "insurance_id": "HYANG-KID-001",
+        "company": "현대해상생명",
+        "product_name": "무배당 현대해상 굿앤굿어린이종합보험Q(Hi2509)",
+        "variants": [
+          {
+            "variant_id": "HYANG-KID-001-V01",
+            "variant_name": "기본형",
+            "description": "기본형"
+          }
+        ],  
+        "files": {
+          "policy": "(무)현대해상 굿앤굿어린이종합보험Q(Hi2509) 보험약관.pdf",
+          "summary": "(무)현대해상 굿앤굿어린이종합보험Q(Hi2509) 상품요약서.pdf"
+        }
+    }
+  ]
