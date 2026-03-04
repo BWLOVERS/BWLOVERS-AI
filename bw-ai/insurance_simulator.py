@@ -129,8 +129,15 @@ class InsuranceSimulator:
 
             print(f"보험 시뮬레이션 LLM 요청 중... (보험사: {insurance_company})")
             result_text = self._invoke_simulation_llm(prompt)
+            prased = self._parse_simulation_response(result_text)
 
-            return {"simulationId": uuid.uuid4().hex[:8], "result": result_text.strip()}
+            return {
+                "simulationId": uuid.uuid4().hex[:8], 
+                "result": {
+                    **prased,
+                    "rag_metadata": {"documents_used": len(relevant_docs)},
+                },
+            }
 
         except Exception as e:
             print(f"시뮬레이션 분석 실패: {e}")
@@ -298,6 +305,22 @@ class InsuranceSimulator:
             )
 
         return "\n".join(parts)
+    
+    def _parse_simulation_response(self, raw_text: str) -> Dict[str, Any]:
+        """LLM 응답에서 JSON 블록 추출 및 파싱"""
+        try:
+            json_block = re.search(r"(\{.*\})", raw_text, re.DOTALL)
+            if not json_block:
+                return {"raw": raw_text}
+
+            fixed = json_block.group(1)
+            fixed = fixed.replace("「", "'").replace("」", "'")
+            fixed = fixed.replace("\u201c", "'").replace("\u201d", "'")
+            fixed = fixed.replace("True", "true").replace("False", "false").replace("None", "null")
+            return json.loads(fixed)
+        except Exception as e:
+            print(f"시뮬레이션 응답 JSON 파싱 실패: {e}")
+            return {"raw": raw_text}
 
     # ──────────────────────────────────────────────
     # 프롬프트: JSON 없이 자연어로 직접 출력
@@ -323,6 +346,7 @@ class InsuranceSimulator:
         return f"""당신은 10년 경력의 보험 약관 전문 상담사입니다.
 아래 [보험 약관 정보]를 꼼꼼히 읽고, 고객의 질문에 대해 전문적이고 친절하게 답변하세요.
 반드시 약관에 명시된 내용만 근거로 사용하고, 약관에 없는 내용은 추측하지 마세요.
+반드시 JSON 형식으로만 답변하세요.
 
 [보험 정보]
 - 보험사: {insurance_company}
@@ -333,45 +357,41 @@ class InsuranceSimulator:
 [고객 질문]
 {question}
 
-[답변 형식 - 반드시 이 순서와 항목으로 작성]
-
-## 결론
-보장 가능 여부를 한 문장으로 명확하게 말씀드립니다.
-(예: "네, 보장됩니다." / "아니요, 보장되지 않습니다." / "조건에 따라 다릅니다.")
-
-## 왜 그렇게 판단했나요?
-약관의 어떤 조항을 근거로 위 결론을 내렸는지 2~4문장으로 설명합니다.
-반드시 조항명과 약관 페이지를 명시하세요.
-예: "약관 제2-2조(보험금의 지급사유, p.466)에 따르면 ..."
-
-## 보험금 지급 기준
-- 지급 여부: 예 / 아니오
-- 지급 기준: (예: 특약가입금액의 2% 등 약관에 명시된 지급률)
-- 지급 횟수: (예: 최초 1회 한정 등)
-- 지급 제한: (없으면 "특별한 제한 없음"으로 기재)
-
-## 보험기간 및 보장개시일
-이 특약의 보험기간이 언제부터 언제까지인지, 보장이 시작되는 시점이 언제인지 설명합니다.
-(예: 계약일부터 분만일까지 등)
-
-## 이 경우 지급 조건 충족 여부
-고객이 말한 상황(임신 20주차, 진단 등)이 약관의 지급 조건을 충족하는지
-항목별로 체크해서 알려주세요.
-- 조건 1: 충족 여부
-- 조건 2: 충족 여부
-
-## 면책 및 제외 사항
-이 특약에서 보장하지 않는 경우가 있다면 설명합니다.
-약관에 없으면 "약관에 별도 면책 조항 없음"으로 기재합니다.
-
-## 고객이 준비해야 할 것
-보험금 청구를 위해 실제로 필요한 서류나 절차를 3~5가지로 정리합니다.
-(예: 진단서, 진단 확정일 기재된 의무기록 등)
-
-## 약관 근거 정리
-이 답변에 사용한 약관 조항을 명확하게 인용합니다.
-- [p.XXX] 조항명: 인용 내용
-- [p.XXX] 조항명: 인용 내용
+[출력 형식 - 반드시 이 JSON 키로만 작성]
+{{
+  "insurance_company": "{insurance_company}",
+  "product_name": "{product_name}",
+  "is_long_term": true,
+  "conclusion": "보장 가능 여부를 한 문장으로 명확하게 말함 (예: 네, 보장됩니다. / 아니요, 보장되지 않습니다. / 조건에 따라 다릅니다.)",
+  "reasoning": "약관 어떤 조항을 근거로 결론을 내렸는지 2~4문장으로 설명 (조항명과 약관 페이지 반드시 포함. / 예: 약관 제2-2조(보험금의 지급사유, p.466)에 따르면 ...)",
+  "payment_criteria": {{
+    "is_covered": "지금 여부에 따라 예/아니오로 대답",
+    "payment_basis": "지급 기준 / 약관에 명시된 지급률 (예: 특약가입금액의 2%)",
+    "payment_count": "지급 횟수 (예: 최초 1회 한정)",
+    "payment_restrictions": "지급 제한 사항 (없으면 특별한 제한 없음으로 기재할 것)"
+  }},
+  "coverage_period": "이 특약의 보험기간이 언제부터 언제까지인지, 보장이 시작되는 시점이 언제인지 설명 (예: 계약일부터 분만일까지 등)",
+  "condition_check": [
+    {{
+      "condition": "조건명",
+      "is_satisfied": "고객이 말한 상황(임신 주차, 진단 등)이 해당 약관의 지급 조건을 충족하는지 항목별로 체크해 알려줄 것",
+      "description": "충족 여부 및 근거 설명"
+    }}
+  ],
+  "exclusions": "면책 및 제외 사항 (약관에 없으면 약관에 별도 면책 조항 없음)",
+  "required_documents": [
+    "보험금 청구에 실제로 필요한 서류 및 절차 1 (예: 진단서, 진단 확정일 기재된 의무기록 등)",
+    "보험금 청구에 실제로 필요한 서류 및 절차 2",
+    "보험금 청구에 실제로 필요한 서류 및 절차 3"
+  ],
+  "evidence_sources": [
+    {{
+      "page_number": 123,
+      "text_snippet": "핵심 조항 인용 요약",
+      "content": "해당 조항 전문 내용"
+    }}
+  ]
+}}
 
 [보험 약관 정보]
 {context}
@@ -392,6 +412,8 @@ class InsuranceSimulator:
                         "반드시 제공된 약관 조항을 근거로만 답변합니다. "
                         "약관에 없는 내용은 절대 추측하거나 만들어내지 마세요. "
                         "답변은 항상 구조화된 형식으로, 충분히 상세하게 작성하세요."
+                        "만약 질문이 보험 시뮬레이션과 무관하거나 의미를 알 수 없는 내용이면, "
+                        "coclusion에 상광에 맞춰 '질문을 이해할 수 없습니다.' 혹은 '질문을 다시 입력해주세요.'라고 답해줘."
                     ),
                 },
                 {"role": "user", "content": prompt},
