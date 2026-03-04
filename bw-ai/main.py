@@ -19,14 +19,14 @@ app = FastAPI(title="BWLOVERS AI", version="1.0.0")
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8080")
 
-# --- 에러 핸들러 ---
+# 에러 핸들러 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     body = await request.body()
     log.error("[422] url=%s errors=%s body=%s", request.url, exc.errors(), body.decode("utf-8", "ignore"))
     return JSONResponse(status_code=422, content={"detail": exc.errors()})
 
-# --- 날짜 변환 유틸리티 ---
+# 날짜 변환
 def any_to_date(v):
     if v is None or isinstance(v, date):
         return v
@@ -42,13 +42,13 @@ def any_to_date(v):
             return None
     return v
 
-# --- 직업 스키마 ---
+# 직업 스키마
 class JobIn(BaseModel):
     jobId: Optional[int] = None
     jobName: Optional[str] = None
     riskLevel: Optional[int] = None
 
-# --- 보험 추천 요청 스키마 (Java DTO와 1:1 매칭) ---
+# 보험 추천 요청 스키마
 class UserProfileIn(BaseModel):
     infoId: Optional[int] = None
     userId: Optional[Union[int, str]] = None
@@ -71,7 +71,7 @@ class PastDisease(BaseModel):
     pastId: Optional[int] = None
     pastDiseaseType: str
     pastCured: bool
-    pastLastTreatedYm: Optional[str] = None # YYYYMM
+    pastLastTreatedYm: Optional[str] = None #YYYYMM
 
 class ChronicDisease(BaseModel):
     chronicId: Optional[int] = None
@@ -94,7 +94,7 @@ class BackendRequest(BaseModel):
     pregnancyInfo: UserProfileIn
     healthStatus: HealthStatusIn  
 
-# --- 보험 추천 응답 스키마 ---
+# 보험 추천 응답
 
 class EvidenceSourceOut(BaseModel):
     page_number: int
@@ -123,7 +123,7 @@ class RecommendListResponseOut(BaseModel):
     expiresInSec: int = 600
     items: List[ItemOut]
 
-# --- 시뮬레이션 요청 스키마 ---
+# 시뮬레이션 요청
 class SpecialContractIn(BaseModel):
     contract_name: str
     page_number: int
@@ -134,7 +134,7 @@ class SimulationRequestIn(BaseModel):
     special_contracts: List[SpecialContractIn] = Field(default_factory=list)
     question: str
 
-# --- 시뮬레이션 응답 스키마 ---
+# 시뮬레이션 응답 
 class SpecialContractOut(BaseModel):
     contract_name: str
     page_number: int
@@ -145,7 +145,7 @@ class SimulationResponseOut(BaseModel):
     product_name: str
     special_contracts: List[SpecialContractOut]
     question: str
-    result: str 
+    result: Any
 
 # --- 보험 추천 API 엔드포인트 ---
 
@@ -156,18 +156,18 @@ async def root():
 @app.post("/ai/recommend")
 async def recommend(request: BackendRequest):
     try:
-        # 1. 데이터 추출
+        # 데이터 추출
         u_prof = request.pregnancyInfo
         h_stat = request.healthStatus
         
         log.info(f"[요청 수신] user_id={u_prof.userId}, 주수={u_prof.gestationalWeek}")
         
-        # 2. 추천 엔진용 Dictionary 변환 (필드명 보정)
+        # 1. 추천 엔진용 Dictionary 변환 
         user_profile_dict = u_prof.model_dump()
         user_profile_dict['gestational_week'] = u_prof.gestationalWeek
         user_profile_dict['is_multiple_pregnancy'] = u_prof.isMultiplePregnancy
         user_profile_dict['miscarriage_history'] = u_prof.miscarriageHistory
-        # jobs 리스트에서 첫 번째 직업명 추출
+        # 2. jobs 리스트에서 첫 번째 직업명 추출
         if u_prof.jobs:
             user_profile_dict['jobName'] = u_prof.jobs[0].jobName
         else:
@@ -191,7 +191,7 @@ async def recommend(request: BackendRequest):
         raw_id = recommendation_result.get("resultId", uuid.uuid4().hex[:8])
         clean_id = raw_id.replace("rag-", "")
 
-        # 메타데이터 로깅
+        # 메타데이터
         if "rag_metadata" in recommendation_result:
             meta = recommendation_result["rag_metadata"]
             log.info(f"[RAG 결과] 문서수={meta.get('documents_used', 0)}, 주수={meta.get('gestational_week', 0)}")
@@ -215,12 +215,10 @@ async def simulation(
     request: SimulationRequestIn,
     authorization: Optional[str] = Header(None, alias="Authorization")
 ):
-    """
-    특정 상황(질병 등) 발생 시 보장 가능 여부를 분석합니다.
-    """
+
     try:
-        # accessToken 검증 (테스트용으로 비활성화 가능)
-        # 환경변수로 제어: REQUIRE_AUTH=false로 설정하면 검증 스킵
+        # accessToken 검증 
+        # 제어: REQUIRE_AUTH=false로 설정시 검증 스킵
         require_auth = os.getenv("REQUIRE_AUTH", "false").lower() == "true"
         
         if require_auth:
