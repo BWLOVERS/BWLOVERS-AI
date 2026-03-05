@@ -145,7 +145,7 @@ class SimulationResponseOut(BaseModel):
     product_name: str
     special_contracts: List[SpecialContractOut]
     question: str
-    result: Any
+    result: str
 
 # --- 보험 추천 API 엔드포인트 ---
 
