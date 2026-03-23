@@ -42,7 +42,7 @@ def _resolve_llama_json_dir() -> str:
 FAISS_DIR = _resolve_faiss_dir()
 LLAMA_JSON_DIR = _resolve_llama_json_dir()
 
-# FAISS 기반 RAG + LLM 관련 임포트
+# FAISS 기반 RAG 및 LLM 임포트
 try:
     from langchain_community.vectorstores import FAISS
     from langchain_huggingface import HuggingFaceEmbeddings
@@ -58,14 +58,12 @@ try:
         encode_kwargs={"normalize_embeddings": True},
     )
 
-    # FAISS 벡터스토어 절대 경로 설정
-    # CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-    # faiss_path = os.path.join(CURRENT_DIR, "..", "faiss_index")
+
     index_file = os.path.join(FAISS_DIR, "index.faiss")
     # FAISS 벡터스토어 로드
     if os.path.exists(index_file):
         vectorstore = FAISS.load_local(FAISS_DIR, embeddings, allow_dangerous_deserialization=True)
-        print(f"✅ 기존 FAISS 벡터스토어 로드됨: {vectorstore.index.ntotal}개 문서 (dir={FAISS_DIR})")
+        print(f"✅ 기존 FAISS 벡터스토어 로드 완료: {vectorstore.index.ntotal}개 문서 (dir={FAISS_DIR})")
     else:
         vectorstore = None
         print("FAISS 벡터스토어 생성 예정")
@@ -99,13 +97,13 @@ def _load_data_maps():
                     target_map.update(json.load(f))
                 print(f"✅ {name} 테이블 로드 완료")
             except Exception as e:
-                print(f"❌ {name} 로드 실패: {e}")
+                print(f"{name} 로드 실패: {e}")
 
 
 _load_data_maps()
 
 
-# ---- 보험사명 추출(오답 방지용) ----
+# 오답 방지를 위한 보험사명 추출
 INSURER_ALIASES = {
     "삼성생명": ["삼성생명"],
     "현대해상": ["현대해상"],
@@ -124,6 +122,7 @@ INSURER_ALIASES = {
     "메트라이프생명": ["메트라이프생명", "메트라이프"],
     "ABL생명": ["ABL생명"],
     "DB생명": ["DB생명"],
+    "우체국": ["우체국", "우체국보험"],
 }
 
 
@@ -158,14 +157,14 @@ def extract_insurer_name(text: Optional[str]) -> str:
 def looks_like_plan_name(s: str) -> bool:
     if not s:
         return False
-    # 보험상품명(플랜명)에서 흔히 보이는 키워드
+    # 보험상품명에서 흔히 등장하는 키워드
     return any(k in s for k in ["무배당", "다이렉트", "해약환급금", "보험", "형", "보장"]) or len(s) >= 15
 
 
 def looks_like_contract_name(s: str) -> bool:
     if not s:
         return False
-    # 특약/담보명에서 흔히 보이는 키워드
+    # 특약/담보명에서 흔히 등장하는 키워드
     return any(k in s for k in ["특약", "특별약관", "진단비", "실손", "위로금", "입원의료비"])
 
 
@@ -177,7 +176,7 @@ class InsuranceRecommender:
             self._load_insurance_data()
 
     def _load_insurance_data(self):
-        """절대 경로를 사용하여 모든 JSON 데이터를 FAISS에 로드"""
+        """절대 경로를 사용하여 모든 JSON 데이터를 FAISS에 로드하기"""
         try:
             # 이미 로드되었다면 스킵하기
             if self.vectorstore and self.vectorstore.index.ntotal > 0:
@@ -191,7 +190,7 @@ class InsuranceRecommender:
                 return
 
             json_files = [f for f in os.listdir(data_dir) if f.endswith(".json")]
-            print(f"📂 {len(json_files)}개 파일 분석 중...")
+            print(f"{len(json_files)}개 파일 분석 중...")
 
             for filename in json_files:
                 filepath = os.path.join(data_dir, filename)
@@ -211,13 +210,13 @@ class InsuranceRecommender:
                 self.vectorstore = FAISS.from_documents(documents, self.embeddings)
                 os.makedirs(FAISS_DIR, exist_ok=True)
                 self.vectorstore.save_local(FAISS_DIR)
-                print(f"✅ FAISS 생성 완료: {len(documents)}개 문서 (dir={FAISS_DIR})")
+                print(f"FAISS 생성 완료: {len(documents)}개 문서 (dir={FAISS_DIR})")
         except Exception as e:
-            print(f"데이터 로드 치명적 오류: {e}")
+            print(f"데이터 로드 오류 발생: {e}")
 
     def search_relevant_documents(self, query: str, n_results: int = 10):
         if not self.vectorstore:
-            print("검색 불가: 벡터스토어가 비어있음")
+            print("검색 불가능: 벡터스토어가 비어있음")
             return []
         try:
             docs_with_scores = self.vectorstore.similarity_search_with_score(query, k=n_results)
@@ -236,16 +235,17 @@ class InsuranceRecommender:
             relevant_docs = self.search_relevant_documents(search_query, n_results=12)
 
             if not relevant_docs:
-                print("⚠️ 검색된 문서 없음 -> Fallback 실행")
+                print("검색된 문서 없음 -> Fallback")
                 return self._fallback_recommendation(user_profile, health_status)
 
-            # LLM 질문 생성 및 호출
+            # LLM 질문 생성 및 호출하기
             context = self._build_context_from_documents(relevant_docs)
             llm_question = self._build_llm_question(analysis, context)
 
-            print(f"🤖 LLM 요청 중... (주수: {analysis['gestational_week']}주)")
+            print(f"LLM 요청 중... (주수: {analysis['gestational_week']}주)")
             rag_result = ask_question(llm_question, profile=analysis)
 
+            # LLM 응답 파싱하기
             if rag_result and "answer" in rag_result:
                 result = self._parse_llm_response_to_recommendation(rag_result["answer"], analysis, relevant_docs)
                 if not result.get("items"):
@@ -293,10 +293,10 @@ class InsuranceRecommender:
 
 지침:
 1. 제공된 [보험 약관 정보]만 근거로 가장 적합한 보험 상품 2-3개를 추천하라.
-2. **중요: 다양한 보험사를 추천하라. 같은 보험사만 추천하지 말 것.**
+2. 중요: 다양한 보험사를 추천하라. 같은 보험사만 추천하지 말 것.
 3. 반드시 JSON 형식으로만 답변하라. (설명 문장/코드블록/주석 금지)
 4. evidence는 문맥에서 그대로 인용한 문장과 페이지를 포함하라.
-5. **매우 중요 - product_name은 반드시 아래 [사용 가능한 보험 목록]에 있는 정확한 이름을 사용하라:**
+5. 매우 중요 - product_name은 반드시 아래 [사용 가능한 보험 목록]에 있는 정확한 이름을 사용하라:
    - insurance_company에는 "삼성생명", "교보라이프플래닛생명", "현대해상" 등 '보험사명'만 작성
    - product_name은 반드시 아래 목록에 있는 정확한 이름을 그대로 사용하라 (문자 하나도 바꾸지 말 것)
    - 목록에 없는 보험 이름을 만들어내지 말 것
@@ -304,7 +304,7 @@ class InsuranceRecommender:
 6. monthly_cost와 sum_insured는 약관 정보나 일반적인 보험료 범위를 참고하여 추정하라.
 7. special_contracts는 각 특약에 대한 상세 정보를 포함해야 함:
    - contract_name: 특약명
-   - contract_description: 약관에서 추출한 특약 설명 (1-2문장)
+   - contract_description: 약관에서 추출한 특약 설명 (3-4문장)
    - contract_recommendation_reason: 이 특약을 추천하는 이유 (사용자의 임신 주수와 위험요인 고려)
    - key_features: 특약의 주요 특징 (배열, 2-3개)
 
@@ -352,7 +352,6 @@ class InsuranceRecommender:
                 doc = relevant_docs[idx] if idx < len(relevant_docs) else relevant_docs[0]
                 md = doc.metadata or {}
 
-                # 스펙 키로 파싱
                 comp = (rec.get("insurance_company") or "").strip()
                 prod = (rec.get("product_name") or "").strip()
 
@@ -372,12 +371,11 @@ class InsuranceRecommender:
                     else:
                         # 불일치하면 LLM 추천값 사용
                         print(f"보험사 불일치 - LLM: {comp}, 문서: {doc_insurer}")
-                        print(f"→ LLM 추천값 유지: {comp} / {prod}")
+                        print(f"LLM 추천값 유지: {comp} / {prod}")
 
                 # 보험사명 정규화 (prices.json과 매칭 개선)
                 comp = self._find_matching_insurer(comp)
 
-                # 방어: LLM이 또 뒤집어 쓰는 경우 교정
                 if looks_like_plan_name(comp) and looks_like_contract_name(prod):
                     plan_name = comp
                     comp = extract_insurer_name(plan_name) or comp
@@ -386,9 +384,8 @@ class InsuranceRecommender:
                 #  테이블에서 먼저 조회, 없으면 LLM 값 사용
                 #  테이블에서 보험료 조회
                 monthly_cost, found_in_table = self._get_insurance_price(comp, prod)
-
                 
-                # 테이블에 값이 없으면 LLM 값 사용
+                # 테이블에 값이 없으면 LLM 값 사용하기
                 if not found_in_table:
                     llm_monthly_cost = rec.get("monthly_cost")
                     if llm_monthly_cost is not None:
@@ -409,7 +406,7 @@ class InsuranceRecommender:
                 # 테이블에서 가입금액 조회
                 sum_insured, found_in_table = self._get_sum_insured(comp, prod)
                 
-                # 테이블에 값이 없으면 LLM 값 사용
+                # 테이블에 값이 없으면 LLM 값 사용하기
                 if not found_in_table:
                     llm_sum_insured = rec.get("sum_insured")
                     if llm_sum_insured is not None:
@@ -496,7 +493,7 @@ class InsuranceRecommender:
         """보험 상품명 정규화 (유사 문자 통일)"""
         if not name:
             return ""
-        # 유사한 문자들을 통일
+        # 유사한 문자들을 통일하기
         name = name.replace("·", "ㆍ")  # 중점 통일 (· → ㆍ)
         name = name.replace(" ", "")  # 공백 제거
         name = name.replace("(해약환급금 미지급형)", "(해약환급금 미지급형Ⅱ)")  # Ⅱ 추가
@@ -518,15 +515,14 @@ class InsuranceRecommender:
         if normalized in PRICE_MAP:
             return normalized
         
-        # 부분 매칭 (예: "교보라이프플래닛" → "교보라이프플래닛생명")
+        # 부분 매칭 (ex: "교보라이프플래닛" -> "교보라이프플래닛생명")
         for key in PRICE_MAP.keys():
             if normalized in key or key in normalized:
                 return key
         
-        return insurer_name  # 매칭 실패 시 원본 반환
+        return insurer_name  # 매칭 실패 시 원본 반환하기
 
     def _get_sum_insured(self, c, p):
-        """가입금액 조회 (부분 매칭 지원) - (값, 찾았는지 여부) 튜플 반환"""
         # 정규화된 상품명
         normalized_p = self._normalize_product_name(p)
         
@@ -583,8 +579,8 @@ class InsuranceRecommender:
         print(f"보험료 매칭 실패: {c} / {p} (정규화: {normalized_p})")
         return 30000, False
 
+    # 가입금액 문자열을 숫자로 변환하기
     def _parse_sum_insured_value(self, value):
-        """가입금액 문자열을 숫자로 변환"""
         if isinstance(value, (int, float)):
             return int(value)
         if isinstance(value, str):
@@ -600,13 +596,13 @@ class InsuranceRecommender:
                     return int(num_str)
         return 10000000
 
+    # 보험료 문자열을 숫자로 변환하기
     def _parse_price_value(self, value):
-        """보험료 문자열을 숫자로 변환"""
         if isinstance(value, (int, float)):
             return int(value)
         if isinstance(value, str):
-            # "40,056원" 또는 "38,700원 ~ 58,200원" 형식 처리
-            # 범위가 있으면 최소값 사용
+            # "40,056원" -> 숫자 형식으로 변환
+            # 가격 범위가 있으면 최소값 사용
             if "~" in value:
                 value = value.split("~")[0].strip()
             # 숫자만 추출
@@ -619,7 +615,6 @@ class InsuranceRecommender:
         return {"resultId": "fallback", "items": [], "rag_metadata": {"fallback": True}}
 
     def _analyze_user_profile(self, user_profile: Dict[str, Any], health_status: Dict[str, Any]) -> Dict[str, Any]:
-        """Java의 다양한 필드명(Camel/Snake) 완벽 대응"""
 
         p_info = user_profile.get("pregnancyInfo") or user_profile
 
