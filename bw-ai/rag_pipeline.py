@@ -2,6 +2,7 @@ import os
 import time
 from typing import Optional, Dict, Any
 
+from llm_router import get_active_llm
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_openai import ChatOpenAI
@@ -9,9 +10,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from dotenv import load_dotenv
 load_dotenv()  # .env 파일 로드
 
-# =========================
 # 1. OpenAI API 키 설정
-# =========================
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 if not OPENAI_API_KEY:
@@ -34,9 +33,7 @@ def _resolve_db_dir() -> str:
             return os.path.abspath(c)
     return os.path.abspath(os.path.join(CURRENT_DIR, "faiss_index"))
 
-# =========================
 # 2. FAISS Vectorstore 로드
-# =========================
 
 DB_DIR = _resolve_db_dir()
 print(f"RAG DB 경로: {DB_DIR}")
@@ -66,12 +63,10 @@ except Exception as e:
     retriever = None
 
 # LLM 설정
-llm = ChatOpenAI(model_name="gpt-4o-mini", temperature=0)
+llm = llm = get_active_llm()
 
-# =========================
+
 # 3. RAG 함수 정의 (reranker top 5)
-# =========================
-
 def ask_question(query: str, profile: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     """
     직접 구현한 RAG 함수 (LangChain chains X)
@@ -148,7 +143,7 @@ def ask_question(query: str, profile: Optional[Dict[str, Any]] = None) -> Option
         print(f"RAG 쿼리 실패: {e}")
         return {
             "query": query,
-            "answer": f"죄송합니다. 질문을 처리하는 중 오류가 발생했습니다: {str(e)}",
+            "answer": f"질문을 처리하는 중 오류가 발생했습니다: {str(e)}",
             "error": str(e)
         }
 
