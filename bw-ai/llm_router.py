@@ -17,7 +17,7 @@ REGISTERED_MODELS = {
 # llm 활성화 여부 확인 
 # 기본값: openai 사용
 # ENABLED_LLMS=openai,claude,gemini 처럼 .env 파일에서 켜기
-ENABLED_LLMS: list[str] = os.getenv("ENABLED_LLMS", "gemini").split(",")
+ENABLED_LLMS: list[str] = os.getenv("ENABLED_LLMS", "openai").split(",")
 
 
 def get_active_llm() -> BaseChatModel:
