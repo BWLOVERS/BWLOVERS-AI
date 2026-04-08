@@ -292,7 +292,7 @@ class InsuranceRecommender:
 임신부 정보: {analysis['gestational_week']}주차, 위험요인({analysis.get('risk_factors', [])}), 다태아({analysis['is_multiple_pregnancy']})
 
 지침:
-1. 제공된 [보험 약관 정보]만 근거로 가장 적합한 보험 상품 2-3개를 추천하라.
+1. 제공된 {context}만 근거로 가장 적합한 보험 상품 5개를 추천하라.
 2. 중요: 다양한 보험사를 추천하라. 같은 보험사만 추천하지 말 것.
 3. 반드시 JSON 형식으로만 답변하라. (설명 문장/코드블록/주석 금지)
 4. evidence는 문맥에서 그대로 인용한 문장과 페이지를 포함하라.

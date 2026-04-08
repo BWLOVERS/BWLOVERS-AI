@@ -35,6 +35,7 @@ try:
     from langchain_community.vectorstores import FAISS
     from langchain_huggingface import HuggingFaceEmbeddings
     from langchain_openai import ChatOpenAI
+    from llm_router import get_active_llm
 
     load_dotenv()
 
@@ -57,7 +58,7 @@ try:
         vectorstore = None
         print(f"보험 시뮬레이션: FAISS 벡터스토어 없음 (dir={FAISS_DIR})")
 
-    llm = ChatOpenAI(model_name="gpt-4o-mini", temperature=0)
+    llm = get_active_llm()
     RAG_AVAILABLE = True
 
 except Exception as e:
@@ -94,7 +95,7 @@ class InsuranceSimulator:
             if not self.llm:
                 return {
                     "simulationId": uuid.uuid4().hex[:8],
-                    "result": "LLM을 사용할 수 없습니다. OPENAI_API_KEY를 확인해주세요.",
+                    "result": "LLM을 사용할 수 없습니다. LLM 설정 및 활성화여부를 확인해주세요.",
                 }
 
             relevant_docs = self._search_simulation_documents(
@@ -323,6 +324,7 @@ class InsuranceSimulator:
 
         return f"""당신은 10년 경력의 보험 약관 전문 상담사입니다.
 아래 [보험 약관 정보]를 꼼꼼히 읽고, 고객의 질문에 대해 전문적이고 친절하게 답변하세요.
+제공된 {context}만 근거로 답변을 작성하세요.
 반드시 약관에 명시된 내용만 근거로 사용하고, 약관에 없는 내용은 추측하지 마세요.
 
 [보험 정보]
