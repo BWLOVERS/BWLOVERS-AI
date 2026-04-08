@@ -3,14 +3,12 @@ from typing import Optional
 from langchain_core.language_models.chat_models import BaseChatModel
 
 from llm.openai_llm import build_openai_llm
-from llm.claude_llm import build_claude_llm
 from llm.gemini_llm import build_gemini_llm
 
 # 베베슈어 사용 llm 목록
 # 여기서 llm on/off 제어
 REGISTERED_MODELS = {
     "openai":  build_openai_llm,
-    "claude":  build_claude_llm,
     "gemini":  build_gemini_llm,
 }
 
