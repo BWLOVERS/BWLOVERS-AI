@@ -112,7 +112,7 @@ class ItemOut(BaseModel):
     insurance_company: str
     product_name: str
     is_long_term: bool
-    sum_insured: int
+    sum_insured: str
     monthly_cost: str
     insurance_recommendation_reason: Optional[str] = None
     special_contracts: Optional[List[SpecialContractOut]] = None
