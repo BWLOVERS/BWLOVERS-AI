@@ -3,7 +3,8 @@ from typing import Optional
 from langchain_core.language_models.chat_models import BaseChatModel
 
 from llm.openai_llm import build_openai_llm
-from llm.gemini_llm import build_gemini_llm
+# 배포 환경 안정화를 위해 Gemini provider는 잠시 비활성화합니다.
+# from llm.gemini_llm import build_gemini_llm
 
 # 베베슈어 사용 llm 목록
 # 여기서 llm on/off 제어
@@ -16,7 +17,6 @@ REGISTERED_MODELS = {
 # 기본값: openai 사용 -> gemini 사용해보기
 # ENABLED_LLMS=openai,claude,gemini 처럼 .env 파일에서 켜기
 ENABLED_LLMS: list[str] = os.getenv("ENABLED_LLMS", "gemini").split(",")
-
 
 def get_active_llm() -> BaseChatModel:
     """
