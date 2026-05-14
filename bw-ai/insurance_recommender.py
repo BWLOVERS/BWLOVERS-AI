@@ -281,7 +281,7 @@ class InsuranceRecommender:
 
     def _build_context_from_documents(self, documents) -> str:
         parts = ["<retrieved_documents>"]
-        for i, doc in enumerate(documents[:8]):  # 8개로 제한
+        for i, doc in enumerate(documents[:8]):  # 8개로 제한! (변경 필요시 수정해야 함)
             md = doc.metadata or {}
             insurer = extract_insurer_name(
                 f"{md.get('product_name', '')} {md.get('source_file', '')}"
@@ -493,23 +493,12 @@ class InsuranceRecommender:
                     llm_sum_insured = rec.get("sum_insured")
                     if llm_sum_insured is not None:
                         if isinstance(llm_sum_insured, str):
-                            if "만원" in llm_sum_insured:
-                                num_str = re.sub(r'[^\d.]', '', llm_sum_insured)
-                                if num_str:
-                                    sum_insured = int(float(num_str) * 10000)
-                                    print(f"LLM 제공 가입금액 사용 (테이블 없음): {sum_insured}원 ({comp} / {prod})")
-                            else:
-                                num_str = re.sub(r'[^\d]', '', llm_sum_insured)
-                                if num_str:
-                                    sum_insured = int(num_str)
-                                    print(f"LLM 제공 가입금액 사용 (테이블 없음): {sum_insured}원 ({comp} / {prod})")
-                        else:
-                            sum_insured = int(llm_sum_insured)
-                            print(f"LLM 제공 가입금액 사용 (테이블 없음): {sum_insured}원 ({comp} / {prod})")
+                            sum_insured = self._parse_sum_insured_value(llm_sum_insured)
+                            print(f"LLM 제공 가입금액 사용 (테이블 없음): {sum_insured} ({comp} / {prod})")
                     else:
                         print(f"가입금액 조회 실패 (테이블/LLM 모두 없음): {comp} / {prod}")
                 else:
-                    print(f"테이블에서 가입금액 조회: {sum_insured}원 ({comp} / {prod})")
+                    print(f"테이블에서 가입금액 조회: {sum_insured} ({comp} / {prod})")
 
                 # 특약 정보 처리 (LLM이 상세 정보를 제공한 경우)
                 special_contracts_data = rec.get("special_contracts", []) or []
@@ -682,7 +671,7 @@ class InsuranceRecommender:
         
         # 매칭 실패 시 기본값
         print(f"가입금액 매칭 실패: {c} / {p} (정규화: {normalized_p})")
-        return 10000000, False
+        return "1,000만원", False
 
     def _get_insurance_price(self, c, p):
         """보험료 조회 (부분 매칭 지원) - (값, 찾았는지 여부) 튜플 반환"""
@@ -713,37 +702,35 @@ class InsuranceRecommender:
         print(f"보험료 매칭 실패: {c} / {p} (정규화: {normalized_p})")
         return 30000, False
 
-    # 가입금액 문자열을 숫자로 변환하기
+    # 가입 금액 문자열로 유지하기
     def _parse_sum_insured_value(self, value):
-        if isinstance(value, (int, float)):
-            return int(value)
         if isinstance(value, str):
-            # "1,000만원" 형식 처리
-            if "만원" in value:
-                num_str = re.sub(r'[^\d.]', '', value)
-                if num_str:
-                    return int(float(num_str) * 10000)
-            # "10,000,000" 형식 처리
-            else:
-                num_str = re.sub(r'[^\d]', '', value)
-                if num_str:
-                    return int(num_str)
-        return 10000000
+            text = value.strip()
+            if text:
+                return text
+        # int인 경우 string으로 변환하기
+        if isinstance(value, (int, float)):
+            n = int(value)
+            if n % 10000 == 0:
+                return f"{n // 10000:,}만원"
+            return f"{n:,}원"
 
-    # 보험료 문자열을 숫자로 변환하기
+        return "1,000만원"
+
+    # 보험료 문자열로 유지하기
     def _parse_price_value(self, value):
-        if isinstance(value, (int, float)):
-            return int(value)
         if isinstance(value, str):
-            # "40,056원" -> 숫자 형식으로 변환
-            # 가격 범위가 있으면 최소값 사용
-            if "~" in value:
-                value = value.split("~")[0].strip()
-            # 숫자만 추출
-            num_str = re.sub(r'[^\d]', '', value)
-            if num_str:
-                return int(num_str)
-        return 30000
+            text = value.strip()
+            if text:
+                return text
+        # int인 경우 string으로 변환하기
+        if isinstance(value, (int, float)):
+            n = int(value)
+            if n % 10000 == 0:
+                return f"{n // 10000:,}만원"
+            return f"{n:,}원"
+
+        return "1,000원"
 
     def _fallback_recommendation(self, up, hs):
         return {"resultId": "fallback", "items": [], "rag_metadata": {"fallback": True}}
