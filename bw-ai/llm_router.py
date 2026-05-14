@@ -2,15 +2,15 @@ import os
 from typing import Optional
 from langchain_core.language_models.chat_models import BaseChatModel
 
-from llm.openai_llm import build_openai_llm
-# 배포 환경 안정화를 위해 Gemini provider는 잠시 비활성화합니다.
-# from llm.gemini_llm import build_gemini_llm
+# from llm.openai_llm import build_openai_llm
+# 배포 환경 안정화를 위해 openai provider는 잠시 비활성화함
+from llm.gemini_llm import build_gemini_llm
 
 # 베베슈어 사용 llm 목록
 # 여기서 llm on/off 제어
 REGISTERED_MODELS = {
     "gemini":  build_gemini_llm,
-    "openai":  build_openai_llm,
+    #"openai":  build_openai_llm,
 }
 
 # llm 활성화 여부 확인 
