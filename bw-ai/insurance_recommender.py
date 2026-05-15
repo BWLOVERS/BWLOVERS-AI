@@ -372,6 +372,9 @@ class InsuranceRecommender:
 8. 실제 monthly_cost와 sum_insured 값은 서버가 prices.json, sum_insured.json에서 채웁니다.
 9. catalog에 없거나 context 근거가 약한 상품은 제외하세요.
 10. JSON 객체 외의 다른 텍스트는 절대 출력하지 마세요.
+11. JSON 문자열 안에서 역슬래시(\)를 절대 사용하지 마세요.
+12. 구분 표현이 필요하면 역슬래시 대신 슬래시(/) 또는 쉼표를 사용하세요.
+13. evidence는 반드시 "[DOC-1][p.12] 인용문..." 형식으로 작성하세요.
 </hard_rules>
 
 <available_products_catalog_json>
@@ -426,7 +429,7 @@ class InsuranceRecommender:
             if not json_payload:
                 return {"items": []}
 
-            data = json.loads(self._fix_json_string(json_payload))
+            data = self._load_json_with_repair(json_payload)
             recs = data.get("recommendations", [])
 
             items = []
@@ -564,10 +567,33 @@ class InsuranceRecommender:
         return match.group(1).strip() if match else ""
 
     def _fix_json_string(self, s: str) -> str:
-        s = s.replace("「", "'").replace("」", "'").replace("“", "'").replace("”", "'")
+        if not s:
+            return ""
+        s = s.strip()
+        # 코드블록 제거
+        s = re.sub(r"^```json\s*", "", s, flags=re.IGNORECASE)
+        s = re.sub(r"^```\s*", "", s)
+        s = re.sub(r"\s*```$", "", s)
+        # Python 스타일 값 보정
         s = s.replace("True", "true").replace("False", "false").replace("None", "null")
+        # 잘못된 escape(\특, \수 등) 보정
+        s = re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', s)
+        # trailing comma 제거
         s = re.sub(r",\s*([}\]])", r"\1", s)
         return s
+    
+    def _load_json_with_repair(self, json_payload: str) -> Dict[str, Any]:
+        fixed = self._fix_json_string(json_payload)
+
+        try:
+            return json.loads(fixed)
+        except json.JSONDecodeError as e:
+            start = max(e.pos - 200, 0)
+            end = min(e.pos + 200, len(fixed))
+            print(f"JSON 파싱 실패 위치: line={e.lineno}, col={e.colno}, pos={e.pos}")
+            print(f"JSON 문제 주변부: {fixed[start:end]}")
+            # 여기서 억지로 전체 개행을 바꾸지 말고 실패를 올려서 fallback으로 넘김
+            raise
 
     def _find_best_matching_document(self, rec: Dict[str, Any], relevant_docs):
         if not relevant_docs:
