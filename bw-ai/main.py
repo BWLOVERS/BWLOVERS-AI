@@ -10,6 +10,7 @@ import logging
 import httpx
 from insurance_recommender import recommender
 from insurance_simulator import InsuranceSimulator
+import asyncio
 simulator = InsuranceSimulator()
 
 logging.basicConfig(level=logging.INFO)
@@ -184,7 +185,11 @@ async def recommend(request: BackendRequest):
                 d['pastLastTreatedAt'] = d.pop('pastLastTreatedYm')
         
         # 3. RAG 추천 엔진 호출
-        recommendation_result = recommender.generate_rag_recommendation(user_profile_dict, health_status_dict)
+        recommendation_result = await asyncio.to_thread(
+            recommender.generate_rag_recommendation,
+            user_profile_dict,
+            health_status_dict,
+        )
         
         # 4. 결과 처리
         items = recommendation_result.get("items", [])
@@ -194,6 +199,8 @@ async def recommend(request: BackendRequest):
         # 메타데이터
         if "rag_metadata" in recommendation_result:
             meta = recommendation_result["rag_metadata"]
+            # RAGAS 평가 결과 로그 추가
+            log.info(f"[RAGAS] selected={meta.get('selected_model')} score={meta.get('total_score')}")
             log.info(f"[RAG 결과] 문서수={meta.get('documents_used', 0)}, 주수={meta.get('gestational_week', 0)}")
         
         return RecommendListResponseOut(
@@ -236,11 +243,12 @@ async def simulation(
         log.info(f"[시뮬레이션 요청] 보험사={request.insurance_company}, 상품={request.product_name}")
         
         # 시뮬레이션 분석 실행
-        simulation_result = simulator.analyze_simulation(
-            insurance_company=request.insurance_company,
-            product_name=request.product_name,
-            special_contracts=[sc.model_dump() for sc in request.special_contracts],
-            question=request.question
+        simulation_result = await asyncio.to_thread(
+            simulator.analyze_simulation,
+            request.insurance_company,
+            request.product_name,
+            [sc.model_dump() for sc in request.special_contracts],
+            request.question,
         )
         
         # 응답 형식 변환

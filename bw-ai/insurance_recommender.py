@@ -5,6 +5,10 @@ import re
 import unicodedata
 from typing import Dict, Any, List, Optional
 from datetime import datetime
+# RAGAS 평가를 위한 모듈
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from llm_router import get_active_llm, get_all_enabled_llms, get_llm_by_key
+from ragas_evaluation import score_candidates
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -233,8 +237,9 @@ class InsuranceRecommender:
         try:
             # 사용자 분석
             analysis = self._analyze_user_profile(user_profile, health_status)
+            enabled_llms = get_all_enabled_llms()
 
-            if not self.llm:
+            if not enabled_llms:
                 print("LLM 사용 불가 -> Fallback")
                 return self._fallback_recommendation(user_profile, health_status)
 
@@ -250,17 +255,88 @@ class InsuranceRecommender:
             context = self._build_context_from_documents(relevant_docs)
             messages = self._build_recommendation_llm_messages(analysis, context)
 
-            print(f"LLM 요청 중... (주수: {analysis['gestational_week']}주)")
-            answer = self._invoke_recommendation_llm(messages)
+            # RAGAS 평가를 위한 후보 생성 (openai, gemini)
+            def _run_one(model_key: str, model_obj):
+                print(f"[{model_key}] start")
+                try:
+                    answer = self._invoke_recommendation_llm(messages, llm_override=model_obj)
+                    print(f"[{model_key}] answer_len={len(answer) if answer else 0}")
+                    if not answer:
+                        print(f"[{model_key}] drop: empty answer")
+                        return None
+                    
+                    preview = answer[:200].replace("\n", " ")
+                    print(f"[{model_key}] answer_preview={preview}")
 
-            # LLM 응답 파싱하기
-            if answer:
-                result = self._parse_llm_response_to_recommendation(answer, analysis, relevant_docs)
-                if not result.get("items"):
-                    return self._fallback_recommendation(user_profile, health_status)
-                return result
+                    parsed = self._parse_llm_response_to_recommendation(answer, analysis, relevant_docs)
+                    if parsed is None:
+                        print(f"[{model_key}] drop: parsed is None")
+                        return None
+                    
+                    item_count = len(parsed.get("items", []))
+                    print(f"[{model_key}] parsed_items={item_count}")
+                    if item_count == 0:
+                        keys = list(parsed.keys()) if isinstance(parsed, dict) else type(parsed).__name__
+                        print(f"[{model_key}] drop: parsed empty items, parsed_keys={keys}")
+                        return None
+                    
+                    print(f"[{model_key}] keep")
+                    return { 
+                        "model_key": model_key,
+                        "answer_text": answer,
+                        "parsed_result": parsed,
+                    }
+                except Exception as e:  
+                    print(f"[{model_key}] fail: {type(e).__name__}: {e}")
+                    return None 
+    
 
-            return self._fallback_recommendation(user_profile, health_status)
+            candidates = []
+            with ThreadPoolExecutor(max_workers=len(enabled_llms)) as ex:
+                futures = [ex.submit(_run_one, k, m) for k, m in enabled_llms]
+                for f in as_completed(futures):
+                    item = f.result()
+                    if item:
+                        candidates.append(item)
+            print("[RAGAS] candidate_count =", len(candidates))
+            print("[RAGAS] candidate_models =", [c["model_key"] for c in candidates])
+            if not candidates:
+                return self._fallback_recommendation(user_profile, health_status)
+        
+            contexts = [(d.page_content or "")[:2000] for d in relevant_docs[:6]]
+            judge_llm = get_llm_by_key("openai")    # 평가용 고정 (openai)
+            
+            try:
+                best, scored = score_candidates(
+                    question=search_query,
+                    contexts=contexts,
+                    candidates=candidates,
+                    judge_llm=judge_llm,
+                )
+                selected = best["parsed_result"]
+                selected.setdefault("rag_metadata", {})
+                selected["rag_metadata"].update({
+                    "documents_used": len(relevant_docs),
+                    "gestational_week": analysis["gestational_week"],
+                    "selected_model": best["model_key"],
+                    "faithfulness": best["faithfulness"],
+                    "answer_relevancy": best["answer_relevancy"],
+                    "total_score": best["total_score"],
+                    "candidate_count": len(candidates),
+                })
+                return selected
+            except Exception as e:
+                print(f"RAGAS 평가 실패 -> 첫 후보 사용: {e}")
+                first = candidates[0]["parsed_result"]
+                first.setdefault("rag_metadata", {})
+                first["rag_metadata"].update({
+                    "documents_used": len(relevant_docs),
+                    "gestational_week": analysis["gestational_week"],
+                    "selected_model": candidates[0]["model_key"],
+                    "ragas_failed": True,
+                })
+                return first
+
         except Exception as e:
             print(f"RAG 프로세스 실패: {e}")
             return self._fallback_recommendation(user_profile, health_status)
@@ -281,43 +357,86 @@ class InsuranceRecommender:
 
     def _build_context_from_documents(self, documents) -> str:
         parts = ["<retrieved_documents>"]
-        for i, doc in enumerate(documents[:8]):  # 8개로 제한! (변경 필요시 수정해야 함)
+
+        filtered_docs = []
+        for doc in documents:
+            md = doc.metadata or {}
+            page = int(md.get("page_number", 0) or 0)
+            section_title = md.get("section_title", "")
+            content = doc.page_content or ""
+
+            # 표지/인사말/가이드북/목차성 페이지 제외
+            if page < 11:
+                continue
+            if any(k in section_title for k in ["CEO인사말", "약관 이용 가이드", "목차"]):
+                continue
+            # 200자 이내에 CEO인사말, 약관 이용 가이드 북 문장 제외
+            if any(k in content[:200] for k in ["CEO인사말", "약관 이용 가이드 북"]):
+                continue
+            # 필터링된 문서 추가
+            filtered_docs.append(doc)
+        # 필터링된 문서가 있으면 필터링된 문서 사용, 없으면 원본 문서 사용
+        target_docs = filtered_docs if filtered_docs else documents
+
+        for i, doc in enumerate(target_docs[:6]): # 참고 문서 -> 상위 6개 문서
             md = doc.metadata or {}
             insurer = extract_insurer_name(
-                f"{md.get('product_name', '')} {md.get('source_file', '')}"
+                f"{md.get('company', '')} "
+                f"{md.get('insurance_company', '')} "
+                f"{md.get('company_name', '')} "
+                f"{md.get('insurer', '')} "
+                f"{md.get('product_name', '')} "
+                f"{md.get('source_file', '')}"
             )
             content = (doc.page_content or "").strip().replace("\n", " ")
+
             parts.append(
                 f'<document id="DOC-{i+1}">\n'
-                f"<insurance_company>{insurer or '?'}</insurance_company>\n"
+                f"<insurance_company>{insurer or md.get('company', '?')}</insurance_company>\n"
                 f"<product_name>{md.get('product_name', '?')}</product_name>\n"
                 f"<section_title>{md.get('section_title', '?')}</section_title>\n"
+                f"<clause_type>{md.get('clause_type', '?')}</clause_type>\n"
                 f"<page_number>{md.get('page_number', '?')}</page_number>\n"
                 f"<source_file>{md.get('source_file', '?')}</source_file>\n"
-                f"<content>{content[:900]}</content>\n"
+                f"<content>{content[:2500]}</content>\n" # 참고 문서마다 -> 상위 2500자만 추출
                 f"</document>"
             )
+
         parts.append("</retrieved_documents>")
         return "\n".join(parts)
-
+    
     def _build_recommendation_system_prompt(self) -> str:
         return """
-당신은 보험 RAG 시스템의 최종 추천 생성기입니다.
-당신의 유일한 근거는 사용자가 제공한 retrieved context와 상품 카탈로그입니다.
+            당신은 보험 RAG 시스템의 최종 추천을 하는 역할입니다. 하지만 당신은 보험 문서를 "생성"하는 모델이 아닙니다.
+            <retrieved_context>에 존재하는 정보만 추출하고, 조합해야합니다. <retrieved_context>에 없는 보장, 특약, 조건을 절대 추가하지 마세요.
+            따라서 모든 추천의 이유와 특약 설명은 반드시 <retrieved_context>의 실제 문장을 근거로 해야합니다.
 
-[최우선 원칙]
-1. retrieved context에 근거가 없는 내용은 절대 생성하지 마세요.
-2. 상품명과 보험사명은 제공된 상품 카탈로그의 값과 정확히 일치해야 합니다.
-3. retrieved context에 근거가 부족하면 추천 수를 줄이거나 빈 배열을 반환하세요.
-4. 출력은 반드시 유효한 JSON 객체 하나만 반환하세요.
-5. reasoning을 장황하게 드러내지 말고, 최종 결과만 출력하세요.
-6. evidence에는 반드시 문서 id와 페이지 번호를 함께 넣으세요.
-   예: "[p.18] 태아 관련 보장을 제공합니다."
-7. 같은 보험사를 반복해도 되지만, 정확성을 해치지 않는 범위에서 다양성을 우선하세요.
-8. special_contracts는 해당 상품 문맥에서 직접 확인 가능한 특약만 포함하세요.
-9. monthly_cost와 sum_insured는 모델이 추정하는 값이 아닙니다.
-   이 두 필드는 서버가 prices.json, sum_insured.json으로 후처리하므로 반드시 null로 두세요.
-"""
+            추천의 개수는 5~10개의 범위에서 가능한 많이 생성해야합니다. 
+
+            당신의 목표는 "정확하면서도 누락이 적은 추천"입니다.
+            특히 <retrieved_context>에 등장하는 상품을 과도하게 제외하지 마세요.
+
+            당신의 유일한 근거는 user message 안의 <retrieved_context>에 포함된 <retrieved_documents>와 <available_products_catalog_json>입니다.
+            여기서 retrieved context는 일반적인 대화 문맥이 아니라, 검색된 실제 보험 문서 조각입니다.
+
+            [최우선 원칙]
+            1. <retrieved_context>에 근거가 없는 내용은 절대 생성하지 마세요.
+            2. 상품명과 보험사명은 제공된 상품 카탈로그의 값과 정확히 일치해야 합니다.
+            3. <retrieved_context>에 근거가 부족하면 추천 수를 줄이거나 빈 배열을 반환하세요.
+            4. 출력은 반드시 유효한 JSON 객체 하나만 반환하세요.
+            5. reasoning을 장황하게 드러내지 말고, 최종 결과만 출력하세요.
+            6. evidence에는 반드시 문서 id와 페이지 번호를 함께 넣으세요.
+            예: "[p.18] 태아 관련 보장을 제공합니다."
+            7. 같은 보험사를 반복해도 되지만, 정확성을 해치지 않는 범위에서 다양성을 우선하세요.
+            8. special_contracts는 해당 상품 문맥에서 직접 확인 가능한 특약만 포함하세요.
+            9. monthly_cost와 sum_insured는 모델이 추정하는 값이 아닙니다.
+            이 두 필드는 서버가 prices.json, sum_insured.json으로 후처리하므로 반드시 null로 두세요.
+            10. page_number는 반드시 같은 <document> 블록 안에 있는 <page_number> 값을 그대로 사용하세요.
+            11. page_number를 추정하거나 다른 문서의 page_number와 섞지 마세요.
+            12. evidence에는 반드시 [DOC-x][p.y] 형식을 포함하세요.
+            - DOC-x는 해당 근거 문장이 들어 있는 <document id>와 같아야 합니다.
+            - p.y는 같은 document 블록의 <page_number> 값과 같아야 합니다.
+            """
 
     def _build_recommendation_llm_messages(self, analysis: Dict[str, Any], context: str) -> List[Dict[str, str]]:
         return [
@@ -342,9 +461,20 @@ class InsuranceRecommender:
 
         return f"""
 <task>
-임신부 프로필과 retrieved context를 바탕으로 맞춤 보험상품을 추천하세요.
-추천 개수는 3개 이상입니다.
-충분한 근거가 없는 상품은 추천하지 마세요.
+임신부 프로필과 <retrieved_context>를 기반으로 보험상품을 추천하세요.
+
+가능한 많은 적합 상품을 추천하세요.
+최소 5개 이상 추천해야 하며, 충분히 관련성이 있는 경우 개수 제한 없이 추천 가능합니다.
+5개라는 개수는 최소이며, 더 추천 가능하다면 반드시 더 많은 개수의 추천을 생성하세요. 
+
+<retrieved_context>에 등장하는 상품들은 우선적으로 추천 후보군에 포함하세요.
+
+완전히 무관한 상품만 제외하세요.
+
+추천 정확도도 중요하지만,
+관련 상품을 과도하게 누락(false negative)하지 않는 것을 우선합니다.
+
+빈 배열은 <retrieved_context>전체가 사용자 조건과 무관할 때만 허용됩니다.
 </task>
 
 <user_profile>
@@ -358,21 +488,21 @@ class InsuranceRecommender:
 1. 현재 임신 주수에 적합한 상품을 우선합니다.
 2. 위험요인과 직접 연결되는 특약 근거가 있는 상품을 우선합니다.
 3. evidence, special_contracts, 추천 사유가 같은 문서 문맥에서 자연스럽게 이어지는 상품만 선택합니다.
-4. 정확성을 해치지 않는 범위에서 보험사 다양성을 확보합니다.
+4. 보험사 다양성보다 사용자 적합성과 문맥 관련성을 우선합니다. 관련성이 높다면 동일 보험사의 여러 상품도 허용됩니다.
 </ranking_policy>
 
 <hard_rules>
 1. insurance_company는 아래 catalog JSON의 key 중 하나여야 합니다.
 2. product_name은 해당 보험사의 배열에 있는 문자열과 완전히 같아야 합니다.
 3. product_name에 특약명, 섹션명, 설명 문구를 섞지 마세요.
-4. special_contracts는 필요시 2개 이상 넣고, 각 특약은 retrieved context에서 직접 확인 가능해야 합니다.
+4. special_contracts는 1개~8개의 범위에서 가능한 많이 포함해야하고, 각 특약은 <retrieved_context>의 <content>에서 직접 확인 가능해야 합니다. 관련 특약이 제한적일 경우 가장 관련성 높은 특약을 포함해도 됩니다.
 5. reason은 사용자 프로필과 상품 적합성을 연결한 2~3문장으로 작성하세요.
-6. evidence는 짧은 직접 인용 1개와 문서 id, 페이지 번호를 포함하세요.
+6. evidence는 짧은 직접 인용 1개와 문서 id, 페이지 번호를 포함하세요. [DOC-x][p.y] <retrieved_context>의 <content>에서 가져온 실제 인용문입니다.
 7. monthly_cost와 sum_insured는 추천 판단 대상이 아니며, 반드시 null로 출력하세요.
 8. 실제 monthly_cost와 sum_insured 값은 서버가 prices.json, sum_insured.json에서 채웁니다.
 9. catalog에 없거나 context 근거가 약한 상품은 제외하세요.
 10. JSON 객체 외의 다른 텍스트는 절대 출력하지 마세요.
-11. JSON 문자열 안에서 역슬래시(\)를 절대 사용하지 마세요.
+11. JSON 문자열 안에서 백슬래시를 절대 사용하지 마세요.
 12. 구분 표현이 필요하면 역슬래시 대신 슬래시(/) 또는 쉼표를 사용하세요.
 13. evidence는 반드시 "[DOC-1][p.12] 인용문..." 형식으로 작성하세요.
 </hard_rules>
@@ -414,13 +544,17 @@ class InsuranceRecommender:
 - product_name이 해당 보험사의 배열 안에 실제로 존재하는가?
 - monthly_cost와 sum_insured를 null로 두었는가?
 - evidence가 [DOC-x][p.y] 형식을 포함하는가?
-- special_contracts의 page_number가 실제 context의 페이지와 일치하는가?
+- special_contracts의 page_number가 같은 document의 <page_number>와 일치하는가?
 - JSON만 출력했는가?
 </final_validation>
 """
 
-    def _invoke_recommendation_llm(self, messages: List[Dict[str, str]]) -> str:
-        response = self.llm.invoke(messages)
+    # def _invoke_recommendation_llm(self, messages: List[Dict[str, str]]) -> str:
+    #    response = self.llm.invoke(messages)
+    #    return response.content if hasattr(response, "content") else str(response)
+    def _invoke_recommendation_llm(self, messages: List[Dict[str, str]], llm_override=None) -> str:
+        target_llm = llm_override or self.llm
+        response = target_llm.invoke(messages)
         return response.content if hasattr(response, "content") else str(response)
 
     def _parse_llm_response_to_recommendation(self, llm_response: str, analysis: Dict[str, Any], relevant_docs) -> Dict[str, Any]:
@@ -433,7 +567,7 @@ class InsuranceRecommender:
             recs = data.get("recommendations", [])
 
             items = []
-            for idx, rec in enumerate(recs[:3]):
+            for idx, rec in enumerate(recs[:8]):
                 doc = self._find_best_matching_document(rec, relevant_docs)
                 md = doc.metadata or {}
 
@@ -613,7 +747,14 @@ class InsuranceRecommender:
             doc_product = self._normalize_product_name(md.get("product_name", "").strip())
             doc_source = unicodedata.normalize("NFC", md.get("source_file", "").strip())
             doc_company = self._find_matching_insurer(
-                extract_insurer_name(f"{md.get('product_name', '')} {doc_source}")
+                extract_insurer_name(
+                    f"{md.get('company', '')} "
+                    f"{md.get('insurance_company', '')} "
+                    f"{md.get('company_name', '')} "
+                    f"{md.get('insurer', '')} "
+                    f"{md.get('product_name', '')} "
+                    f"{doc_source}"
+                )
             )
             doc_page = md.get("page_number")
 

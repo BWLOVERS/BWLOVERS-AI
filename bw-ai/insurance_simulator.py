@@ -3,6 +3,10 @@ import os
 import uuid
 import re
 from typing import Dict, Any, List, Optional
+# RAGAS 평가를 위한 모듈
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from llm_router import get_active_llm, get_all_enabled_llms, get_llm_by_key
+from ragas_evaluation import score_candidates
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -75,10 +79,7 @@ class InsuranceSimulator:
         self.embeddings = embeddings
         self.llm = llm
 
-    # ──────────────────────────────────────────────
-    # 공개 메서드
-    # ──────────────────────────────────────────────
-
+    # 보험 시뮬레이션 분석
     def analyze_simulation(
         self,
         insurance_company: str,
@@ -129,9 +130,60 @@ class InsuranceSimulator:
             )
 
             print(f"보험 시뮬레이션 LLM 요청 중... (보험사: {insurance_company})")
-            result_text = self._invoke_simulation_llm(prompt)
+            
+            enabled_llms = get_all_enabled_llms()
+            if not enabled_llms:
+                return {
+                    "simulationId": uuid.uuid4().hex[:8],
+                    "result": "LLM을 사용할 수 없습니다. LLM 설정 및 활성화여부를 확인해주세요.",
+                }
+            def run_one(model_key: str, model_obj):
+                try:
+                    txt = self._invoke_simulation_llm(prompt, llm_override=model_obj)
+                    if not txt:
+                        return None 
+                    return {"model_key": model_key, "answer_text": txt}
+                except Exception as e:
+                    print(f"[{model_key}] 시뮬레이션 생성 실패: {e}")
+                    return None
+            candidates = []
+            with ThreadPoolExecutor(max_workers=len(enabled_llms)) as ex:
+                futures = [ex.submit(run_one, k, m) for k, m in enabled_llms]
+                for f in as_completed(futures):
+                    item = f.result()
+                    if item:
+                        candidates.append(item)
+            if not candidates:
+                return {
+                    "simulationId": uuid.uuid4().hex[:8],
+                    "result": "LLM을 사용할 수 없습니다. LLM 설정 및 활성화여부를 확인해주세요.",
+                }
+            contexts = [(d.page_content or "")[:2000] for d in relevant_docs[:6]]
+            judge_llm = get_llm_by_key("openai")    # 평가는 고정
 
-            return {"simulationId": uuid.uuid4().hex[:8], "result": result_text.strip()}
+            try:
+                best, scored = score_candidates(
+                    question=question,
+                    contexts=contexts,
+                    candidates=candidates,
+                    judge_llm=judge_llm,
+                )
+                return {
+                    "resultId": uuid.uuid4().hex[:8],
+                    "result": best["answer_text"].strip(),
+                    "selected_model": best["model_key"],
+                    "faithfulness": best["faithfulness"],
+                    "answer_relevancy": best["answer_relevancy"],
+                    "total_score": best["total_score"],
+                }
+            except Exception as e:
+                print(f"RAGAS 평가 실패: {e}")
+                return {
+                   "resultId": uuid.uuid4().hex[:8],
+                   "result": candidates[0]["answer_text"].strip(),
+                   "selected_model": candidates[0]["model_key"],
+                   "ragas_failed": True,
+                }
 
         except Exception as e:
             print(f"시뮬레이션 분석 실패: {e}")
@@ -140,9 +192,6 @@ class InsuranceSimulator:
                 "result": f"분석 중 오류가 발생했습니다: {str(e)}",
             }
 
-    # ──────────────────────────────────────────────
-    # 내부 유틸
-    # ──────────────────────────────────────────────
 
     def _normalize(self, s: Optional[str]) -> str:
         if not s:
@@ -169,10 +218,8 @@ class InsuranceSimulator:
         kws = [t for t in tokens if t not in stopwords and len(t) >= 2]
         return kws if kws else [self._normalize(contract_name)]
 
-    # ──────────────────────────────────────────────
-    # 문서 검색: 특약 중심, 핵심 페이지만
-    # ──────────────────────────────────────────────
 
+    # 문서 검색: 특약 중심, 핵심 페이지만
     def _search_simulation_documents(
         self,
         insurance_company: str,
@@ -209,7 +256,7 @@ class InsuranceSimulator:
                     if key not in pool or pool[key][1] > priority:
                         pool[key] = (doc, priority)
 
-            # ① 특약별 핵심 검색
+            # 1. 특약별 핵심 검색
             for sc in special_contracts:
                 cn = sc.get("contract_name", "")
                 pn = sc.get("page_number")
@@ -247,7 +294,7 @@ class InsuranceSimulator:
                     except Exception:
                         pass
 
-            # ② 질문 내용으로 시맨틱 검색
+            # 2. 질문 내용으로 유사도 검색
             q4 = f"{insurance_company} {product_name} {question}"
             r4 = self.vectorstore.similarity_search(q4, k=60)
             add_docs(r4, priority=4)
@@ -255,11 +302,11 @@ class InsuranceSimulator:
             if not pool:
                 return []
 
-            # ③ 우선순위 낮은 순으로 정렬 후 상위 25개
+            # 3. 우선순위 낮은 순으로 정렬 후 상위 25개 뽑기
             sorted_docs = sorted(pool.values(), key=lambda x: x[1])
             top_docs = [doc for doc, _ in sorted_docs[:25]]
 
-            # ④ 페이지 기준 정렬 (읽기 순서 유지)
+            # 4. 페이지 기준 정렬 (읽기 순서 유지)
             top_docs.sort(key=lambda d: int((d.metadata or {}).get("page_number", 10**9)))
 
             return top_docs
@@ -268,10 +315,8 @@ class InsuranceSimulator:
             print(f"시뮬레이션 문서 검색 실패: {e}")
             return []
 
-    # ──────────────────────────────────────────────
-    # 컨텍스트 빌드
-    # ──────────────────────────────────────────────
 
+    # 보험 시뮬레이션 응답 context 빌드
     def _build_simulation_context(
         self,
         documents: List,
@@ -301,10 +346,8 @@ class InsuranceSimulator:
         return "\n".join(parts)
     
 
-    # ──────────────────────────────────────────────
-    # 프롬프트: JSON 없이 자연어로 직접 출력
-    # ──────────────────────────────────────────────
 
+    # 보험 시뮬레이션 LLM 질문 빌드
     def _build_simulation_llm_question(
         self,
         insurance_company: str,
@@ -379,13 +422,12 @@ class InsuranceSimulator:
 [보험 약관 정보]
 {context}
 """
-
-    # ──────────────────────────────────────────────
+# ──────────────────────────────────────────────
     # LLM 호출 (JSON 파싱 없음 → 자연어 그대로 반환)
-    # ──────────────────────────────────────────────
-
-    def _invoke_simulation_llm(self, prompt: str) -> str:
-        response = self.llm.invoke(
+    # llm_override: RAGAS 평가를 위한 후보 생성 (openai, gemini)
+    def _invoke_simulation_llm(self, prompt: str, llm_override=None) -> str:
+        target_llm = llm_override or self.llm
+        response = target_llm.invoke(
             [
                 {
                     "role": "system",
